@@ -1,0 +1,105 @@
+# Every tunable value for the scorecard, the service and the monitoring layer lives here.
+# Changing a threshold or a window length is a config edit, not a code edit.
+
+data:
+  raw_path: "data/raw/application_train.csv"
+  id_column: "SK_ID_CURR"
+  target_column: "TARGET"
+
+split:
+  # application_train.csv carries no application date, so there is no true time index.
+  # SK_ID_CURR is used as a documented proxy for application sequence: the file is sorted
+  # by it, and the later ids stand in for later applications. This is a stated assumption,
+  # not a verified origination date. See README, "What is simulated and what is real".
+  order_by: "SK_ID_CURR"
+  train_fraction: 0.70
+
+features:
+  numeric:
+    - EXT_SOURCE_1
+    - EXT_SOURCE_2
+    - EXT_SOURCE_3
+    - AGE_YEARS
+    - EMPLOYED_YEARS
+    - ID_PUBLISH_YEARS
+    - PHONE_CHANGE_YEARS
+    - AMT_INCOME_TOTAL
+    - AMT_CREDIT
+    - AMT_ANNUITY
+    - REGION_POPULATION_RELATIVE
+    - CREDIT_INCOME_RATIO
+    - ANNUITY_INCOME_RATIO
+    - CREDIT_TERM
+    - GOODS_CREDIT_RATIO
+  categorical:
+    - CODE_GENDER
+    - NAME_EDUCATION_TYPE
+    - NAME_INCOME_TYPE
+    - NAME_FAMILY_STATUS
+    - NAME_CONTRACT_TYPE
+
+binning:
+  max_prebins: 20
+  min_bin_fraction: 0.03
+  min_bin_bads: 5
+  enforce_monotonic: true
+  min_categorical_fraction: 0.01
+
+selection:
+  min_iv: 0.02
+  max_correlation: 0.75
+
+scaling:
+  base_score: 600.0
+  base_odds: 50.0
+  pdo: 20.0
+
+# Bands are specified as percentiles of the training score distribution. Training resolves
+# them to absolute score cutoffs and persists those, so the served API applies fixed
+# numbers rather than recomputing quantiles per request.
+bands:
+  decline_below_percentile: 10.0
+  refer_below_percentile: 30.0
+
+monitoring:
+  window_size: 2000          # scored requests per monitoring window
+  min_window_size: 500       # below this a window is skipped rather than scored on noise
+  psi_warn: 0.10             # conventional scorecard thresholds, see docs/business_case.md
+  psi_alert: 0.25
+  csi_warn: 0.10
+  csi_alert: 0.25
+  prediction_psi_warn: 0.10
+  prediction_psi_alert: 0.25
+  reference_bins: 10         # deciles of the training distribution for prediction drift
+  debounce_windows: 3        # consecutive breaching windows required before an alert fires
+  cooldown_windows: 5        # windows to wait before the same metric can fire again
+
+stream:
+  total_requests: 40000
+  requests_per_batch: 200
+  # The first `stable_fraction` of the stream samples the held out slice as it stands.
+  # After that an explicitly documented shift is applied to the sampling weights: the same
+  # real held out records, drawn in a deliberately different mix. No feature value is ever
+  # fabricated. See README.
+  stable_fraction: 0.4
+  # Strength was calibrated, not guessed. On a 2000 request window this peaks at a score PSI
+  # of roughly 0.5 and an approval rate falling from about 70 percent to about 39 percent:
+  # severe, and the sort of shift a risk function would want to hear about, but not absurd.
+  # A strength of 3.0 was tried first and produced a PSI above 2.0, which is not a drift
+  # scenario, it is a broken feed.
+  drift_strength: 1.5
+  # Fraction of the drifted regime spent ramping up before the shift holds at full strength.
+  # Onset then plateau, rather than a ramp that only peaks at the very last request, because
+  # a real channel change persists once it happens, and a sustained breach is what the
+  # debounce rule is written for.
+  drift_ramp_fraction: 0.3
+  drift_features:
+    - EXT_SOURCE_2
+    - EXT_SOURCE_3
+    - AGE_YEARS
+  seed: 20240815
+
+service:
+  db_path: "data/monitoring.db"
+  model_path: "models/scorecard.joblib"
+  reference_path: "models/reference.json"

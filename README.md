@@ -1,0 +1,487 @@
+# Credit scorecard serving and drift monitoring
+
+I built a scoring API for an application credit scorecard, containerised it, and then built a
+drift monitoring system on top of it that keeps running: a stream of scoring requests, rolling
+population and characteristic stability indices against the training time reference, threshold
+alerting with a debounce so it does not fire on noise, and a dashboard showing all of it.
+
+The model here is deliberately not the interesting part. It is a refit of the same simple
+weight of evidence and logistic scorecard methodology I used on the application scorecard this
+accompanies, kept unchanged on purpose. What I wanted to build was the part that comes after a
+model is finished: serving it, watching it, and deciding when to interrupt somebody. Every
+other project in my portfolio is analysis in a notebook or a scripted pipeline. Nothing was
+ever served, and nothing kept running.
+
+The thing I most want to be judged on is the alerting design, and specifically what it
+declines to send.
+
+## What is real and what is simulated
+
+Stating this first because it determines how everything below should be read.
+
+**Real.** The data is the Kaggle Home Credit Default Risk `application_train.csv`, 307,511
+applications. The model is fitted on 215,257 of them and evaluated on 92,254 that take no part
+in fitting. Every application scored in the run below is a genuine, unmodified row from that
+held out slice. No feature value anywhere in this project is synthetic. Every request goes
+over HTTP to the live API, which does the scoring and writes its own log. Every number in this
+README comes from running `make demo`, and the raw outputs are in `reports/`.
+
+**Simulated.** The traffic. Specifically, the arrival order and the timing. There is no
+production system here and no real users. The stream decides which real applications arrive
+when, and in the later portion it deliberately reweights that choice to introduce a known
+population shift. That shift is mine. I chose it, calibrated it, and it is the reason the
+monitor has something to detect.
+
+**A proxy, not a fact.** `application_train.csv` has no date column, so there is no true time
+ordering. I split on `SK_ID_CURR` ascending and treat the later ids as later applications.
+That is a documented assumption about sequence, not a verified origination date. What is true
+regardless is that no held out row takes any part in fitting.
+
+I could not use naturally occurring drift because there is none to use: the held out slice is
+a later portion of the same static extract, so its distribution is close to the training slice
+by construction. A monitoring system that was never once observed to detect anything proves
+nothing, so I injected a shift I could measure the response to. That makes this evidence that
+the mechanism works. It is not evidence about how this population behaves in the field.
+
+## The system
+
+```
+                    application_train.csv  (307,511 rows, no date column)
+                                 |
+                    split on SK_ID_CURR ascending
+                       /                        \
+              training slice                 held out slice
+              215,257 rows                    92,254 rows
+                    |                               |
+              [ make train ]                        |
+                    |                               |
+        models/scorecard.joblib                     |
+        WOE bins + logistic + band cutoffs          |
+        + training time reference distributions     |
+                    |                               |
+                    v                               v
+            +---------------+   HTTP POST /score   +------------------+
+            |  FastAPI      | <------------------- |  stream replay   |
+            |  scoring API  |                      |  (simulated)     |
+            +---------------+                      +------------------+
+                    |
+              writes every scored request, with the bin
+              each characteristic fell into
+                    |
+                    v
+            +---------------------+       +----------------------+
+            |  SQLite store       | <---> |  monitor (scheduled) |
+            |  scoring log        |       |  PSI / CSI / bands   |
+            |  drift metrics      |       |  debounce + cooldown |
+            |  alerts             |       +----------------------+
+            +---------------------+
+                    |
+                    v
+            +---------------------+
+            |  Streamlit          |
+            |  dashboard          |
+            +---------------------+
+```
+
+The reference distributions are captured at fit time and frozen into the artifact. This is the
+single most important design decision in the project. A baseline recomputed periodically from
+recent traffic drifts along with the traffic and never raises anything, which is the most
+common way drift monitoring is built wrong.
+
+## Quick start
+
+Local, and this is the path with measured output behind it:
+
+```bash
+make install && make demo
+```
+
+That fits the card, starts the API, posts the simulated stream to it over HTTP, runs the
+monitor over every complete window, writes the history to `reports/`, and prints a summary. It
+took 236 seconds on my machine, see `reports/end_to_end_summary.json` for the exact figure.
+
+Then to look at it:
+
+```bash
+make dashboard
+```
+
+The containerised path, which has **not** been run here, see the section below:
+
+```bash
+docker compose up --build
+```
+
+## Getting the data
+
+The raw CSV is not in this repository. It is roughly 158 MB, which does not belong in git.
+
+```bash
+kaggle competitions download -c home-credit-default-risk -f application_train.csv -p data/raw
+```
+
+Unzip it so that `data/raw/application_train.csv` exists. Any copy of the Kaggle file works.
+Only `application_train.csv` is needed, not the other tables.
+
+## The scorecard
+
+A refit of established methodology, not new modelling. Quantile prebins merged until every bin
+holds at least 3% of the population and the bad rate moves in one direction, missing values
+kept as their own bin rather than imputed, characteristics kept above an information value
+floor of 0.02 and dropped when correlated above 0.75, logistic regression on the weight of
+evidence columns, scaled to 600 points at 50:1 odds with 20 points per doubling.
+
+15 characteristics retained from 20 candidates. Measured on the 92,254 held out applications:
+
+| Metric | Training | Held out |
+|---|---|---|
+| AUC | 0.7402 | 0.7463 |
+| Gini | 0.4805 | 0.4927 |
+| KS | 0.3560 | 0.3687 |
+| Bad rate | 8.13% | 7.95% |
+
+Bands are set as percentiles of the training score distribution and then frozen as absolute
+cutoffs, so the API applies fixed numbers rather than recomputing quantiles per request. On
+the held out slice:
+
+| Band | Score | Share | Bad rate |
+|---|---|---|---|
+| Decline | below 532.25 | 9.7% | 25.8% |
+| Refer | 532.25 to 553.34 | 20.2% | 12.5% |
+| Approve | 553.34 and above | 70.2% | 4.2% |
+
+Held out AUC slightly above training is normal for a regularised model on a different slice
+and is not something I have tuned toward.
+
+## The scoring API
+
+`POST /score` takes raw application fields, `GET /health` reports what is loaded, `GET /model`
+reports what is deployed, which is the first question in any model review.
+
+The derived characteristics, the ratios and the ages, are computed **server side** by the same
+`src/features.py` that training calls. Training and serving skew in derived features is a
+common cause of a model that validates well and then behaves oddly in production, and one
+implementation is the cheapest defence against it. There is a test asserting that a record
+transformed alone matches the same record transformed inside a batch.
+
+Validation is strict, and the reason is credit specific. A scorecard maps every input into a
+bin, and every bin has a weight of evidence including the missing bin, so a malformed input
+never fails loudly on its own. An age of 4,000 or a string where a number belongs would
+quietly land in some bin and come back as a confident looking score. So the boundary refuses:
+
+| Request | Response |
+|---|---|
+| `"EXT_SOURCE_2": "0.35"` | 422, `EXT_SOURCE_2: Input should be a valid number` |
+| `"EXT_SOURCE_2": 1.4` | 422, `Input should be less than or equal to 1` |
+| `"DAYS_BIRTH": 9461` | 422, `Input should be less than or equal to -6570` |
+| `"NAME_EDUCATION_TYPE": "PhD"` | 422, lists the five fitted levels |
+| `"EXT_SOURCE_TWO": 0.4` | 422, `Extra inputs are not permitted` |
+| `AMT_ANNUITY > AMT_CREDIT` | 422, cross field rule |
+| `"EXT_SOURCE_1": null` | 200, missing is a legitimate value with its own fitted bin |
+
+Three specifics worth calling out. Strict mode means `"0.35"` is refused rather than coerced,
+because a string arriving where a float belongs means the caller has a bug and returning a
+score would hide it. `extra="forbid"` means a misspelled field is refused rather than ignored,
+which is the worst case: a plausible score computed without a characteristic the caller
+believed they had sent. And a rejected request is never written to the scoring log, so caller
+side bugs cannot contaminate the drift baseline and send someone hunting for a population
+change that never happened.
+
+The API also refuses to start if the published request contract and the fitted artifact
+disagree about category levels, which catches a refit that quietly changed what the service
+should accept.
+
+Measured over the 40,000 request run: mean latency 4.2 ms, p95 4.9 ms, 171.4 requests per
+second single threaded, 0 rejections. See `reports/end_to_end_summary.json` for the full
+latency distribution and `reports/stream_manifest.json` for the throughput figure.
+
+## Containerisation, and what is not verified
+
+**The image has never been built and the stack has never been run.** There was no Docker
+daemon available in the environment where I built this. I am stating that plainly rather than
+implying otherwise, because the difference between "I wrote a Dockerfile" and "I ran this in a
+container" is exactly what an interviewer is probing for.
+
+What exists: a single image serving four roles, chosen by command rather than built four
+times, dependencies installed before source is copied so editing a module does not invalidate
+the slow layer, a non-root user, a healthcheck, and a compose file with five services in
+dependency order. `trainer` runs once and must exit cleanly before `api` starts, so the API
+can never come up on a missing artifact. `stream`, `monitor` and `dashboard` wait for the API
+to report healthy. Data, the artifact and the SQLite file are bind mounted rather than baked
+in.
+
+What I could verify without a daemon, via `make compose-check`:
+
+- every `depends_on` target exists and every condition is a real compose condition
+- every service waited on with `service_healthy` actually declares a healthcheck
+- every bind mount source path exists
+- every command points at a module or script that exists
+- no two services publish the same host port
+- the Dockerfile copies everything the commands need, and runs as a non-root user
+- all 13 dependencies are pinned, so the image is reproducible
+- `.dockerignore` excludes the 158 MB CSV from build context
+
+That check currently passes. It cannot tell you whether the image builds, whether the pinned
+wheels resolve on linux/amd64, or whether the containers can reach each other. Please run
+`docker compose up --build` before relying on it. If it needs fixes I would expect them in
+wheel resolution, or in bind mount permissions on a Linux host, which the Dockerfile comments
+address.
+
+## The simulated scoring stream
+
+The stream is an ordinary HTTP client. It posts held out applications to `/score` exactly as
+any caller would, so the scoring log is written by the API itself rather than through a back
+door into the database. It runs in two documented regimes.
+
+**Regime 1, the first 16,000 requests.** Drawn from the held out slice with equal probability.
+This is the control. The population genuinely has not shifted, so the indices should stay near
+zero, and any alert here is a false positive. This half matters as much as the other: it is
+what shows the monitor is not simply firing on noise.
+
+**Regime 2, the remaining 24,000.** The same pool of real applications, drawn with unequal
+probability, weighted toward lower external bureau scores and younger applicants, ramping up
+over the first 30% of the regime and then holding. The effect is a portfolio quietly taking on
+a riskier mix, which is the realistic version of this failure: not a broken feed, but an
+origination channel gradually changing who it sends. Onset then plateau, because a real
+channel change persists once it happens.
+
+The strength was calibrated, not guessed. My first attempt used a strength of 3.0, which
+produced a score PSI above 2.0. That is not a drift scenario, it is a broken feed, so I
+measured the response curve and reduced it to 1.5, which peaks around 0.5 to 0.6. Severe, and
+the sort of thing a risk function would want to hear about, but not absurd.
+
+`reports/stream_manifest.json` records the exact parameters of every run. The seed is fixed,
+so the run reproduces.
+
+## The monitoring layer
+
+Three signals per window, answering three different questions.
+
+- **`psi_score`**, population stability on the score distribution against the training score
+  deciles. Has the population changed.
+- **`psi_band`**, the same calculation over the three decision bands. Has what the model
+  decides changed. Deliberately coarse, because this is the version that maps onto approval
+  rate and expected loss.
+- **`csi`** per characteristic, against the training bin distribution. Which input moved. This
+  is the attribution step.
+
+I deliberately do not compute PSI on predicted probability. Score is a monotone transform of
+log odds, so binning by score decile and by probability decile assign identical records to
+identical bins. It would be the same quantity reported twice.
+
+Windows are claimed by scoring log id, not by wall clock time, so every window is exactly
+2,000 requests and the sampling variance of the index is constant. Time based windows vary in
+size with traffic, and a quiet overnight window then produces a large index for no reason
+other than having fewer records in it. A monitor that alerts every night at 3am gets muted. A
+partial window waits rather than being scored, and the monitor records that it waited, so a
+stopped monitor and a quiet one are distinguishable.
+
+**Why the window is 2,000.** This is measured, not assumed. `make noise` draws repeatedly from
+the training reference distribution itself, so the population is stable by construction and
+every index produced is pure sampling noise. On the worst behaved characteristic, over 500
+trials each:
+
+| Window size | Worst p95 | Worst observed | Share crossing 0.10 | Share crossing 0.25 |
+|---|---|---|---|---|
+| 100 | 0.4868 | 0.8432 | 96.6% | 34.0% |
+| 200 | 0.1593 | 0.3741 | 44.4% | 0.8% |
+| 500 | 0.0634 | 0.0970 | 0.0% | 0.0% |
+| 1000 | 0.0303 | 0.0479 | 0.0% | 0.0% |
+| 2000 | 0.0147 | 0.0224 | 0.0% | 0.0% |
+| 5000 | 0.0060 | 0.0105 | 0.0% | 0.0% |
+
+At 100 requests a third of windows cross the alert threshold on a population that has not
+moved at all. At 2,000 the noise floor sits an order of magnitude below the warn line, so a
+reading above 0.10 means something happened. The 500 minimum is the smallest window where
+noise never reached the warn line. A threshold without a known noise floor underneath it is
+not a threshold, it is a number.
+
+The 0.10 and 0.25 cut points themselves are the conventional scorecard thresholds. They are a
+stated convention, not a calibration against observed incidents, because there are no real
+incidents here. See `docs/business_case.md`.
+
+## Alerting and debounce
+
+Three rules, all of which exist to protect one thing: that an alert still means something in
+month nine.
+
+**Sustained breach.** An alert requires three consecutive breaching windows. A spike that
+reverts never fires. The rule is consecutive rather than an average over a trailing period,
+because a mean would let one extreme window drag two quiet ones over the line, which is the
+exact failure being guarded against. Three breaches in four windows with a gap does not fire,
+and there is a test for that specific case.
+
+**Cooldown.** After firing, the same metric is suppressed for five windows. Drift does not
+repair itself, so without this a sustained shift re fires every window, which is alert fatigue
+by another route. The breach stays visible in the metric history and on the dashboard
+throughout. What is suppressed is the repeat notification, not the observation.
+
+**Attribution rather than duplication.** When the population shifts, every correlated
+characteristic breaches at once. Before I added this tier, the run below fired sixteen alerts
+for one event, which is the fatigue problem appearing inside my own system. A characteristic
+breach is now folded into the population alert as attribution while a population metric is also
+breaching. When the population metrics are quiet and one characteristic moves alone, it alerts
+in its own right, because that is the broken feed case and it is genuinely separate.
+
+No debounce state is stored. The consecutive count and the cooldown are derived from the
+metric and alert history on each evaluation, so a restarted monitor reaches the same conclusion
+as one that has been up for a week.
+
+## What the run produced
+
+From `make demo`: 40,000 requests, 0 rejected, 20 windows of 2,000, 4 alerts.
+
+| Window | Regime | Score PSI | Band PSI | Approval rate | Mean PD | Status |
+|---|---|---|---|---|---|---|
+| 1 | stable | 0.0056 | 0.0019 | 68.1% | 0.083 | ok |
+| 2 | stable | 0.0029 | 0.0003 | 69.4% | 0.082 | ok |
+| 3 | stable | 0.0030 | 0.0011 | 69.0% | 0.082 | ok |
+| 4 | stable | 0.0063 | 0.0035 | 69.7% | 0.081 | ok |
+| 5 | stable | 0.0062 | 0.0018 | 70.6% | 0.083 | ok |
+| 6 | stable | 0.0048 | 0.0005 | 70.3% | 0.080 | ok |
+| 7 | stable | 0.0089 | 0.0009 | 69.6% | 0.080 | ok |
+| 8 | stable | 0.0070 | 0.0003 | 69.3% | 0.082 | ok |
+| 9 | ramping | 0.0144 | 0.0084 | 66.0% | 0.087 | ok |
+| 10 | ramping | 0.0894 | 0.0713 | 58.1% | 0.104 | ok |
+| 11 | ramping | 0.3050 | 0.2621 | 47.2% | 0.127 | **breach** |
+| 12 | ramping | 0.5221 | 0.4378 | 39.4% | 0.143 | **breach** |
+| 13 | plateau | 0.6414 | 0.5468 | 37.1% | 0.154 | **ALERT FIRED** |
+| 14 | plateau | 0.5914 | 0.4924 | 38.5% | 0.150 | breach, cooldown |
+| 15 | plateau | 0.5612 | 0.4737 | 39.5% | 0.149 | breach, cooldown |
+| 16 | plateau | 0.6022 | 0.4536 | 39.6% | 0.148 | breach, cooldown |
+| 17 | plateau | 0.5964 | 0.4877 | 38.3% | 0.150 | breach, cooldown |
+| 18 | plateau | 0.5482 | 0.4305 | 40.4% | 0.148 | **ALERT REFIRED** |
+| 19 | plateau | 0.5738 | 0.4548 | 39.3% | 0.148 | breach, cooldown |
+| 20 | plateau | 0.6270 | 0.5224 | 37.3% | 0.151 | breach, cooldown |
+
+This is the full lifecycle in one run:
+
+- **Eight stable windows, zero false positives.** Score PSI between 0.0029 and 0.0089, against
+  a warn threshold of 0.10. 16,000 requests through the monitor without a single spurious
+  alert.
+- **Detection is gradual, as designed.** The index moves at window 9, is clearly elevated at
+  10, and first breaches at 11.
+- **The debounce cost two windows and worked.** Breach began at window 11. The alert fired at
+  window 13, on the third consecutive breach, naming windows 11, 12 and 13 in its audit trail.
+- **The cooldown suppressed four repeats.** Windows 14 through 17 were still in breach and
+  still recorded as such. No notification. The alert refired at window 18, exactly five windows
+  after the first, and reported an 8 window consecutive run.
+- **Approval rate fell from 70% to 37%** and mean predicted PD nearly doubled from 0.080 to
+  0.154. This is the business consequence the monitoring exists to surface.
+
+The attribution, ranked from the final window:
+
+| Characteristic | CSI | Status | Injected? |
+|---|---|---|---|
+| EXT_SOURCE_2 | 0.4702 | alert | yes |
+| AGE_YEARS | 0.4074 | alert | yes |
+| EXT_SOURCE_3 | 0.3751 | alert | yes |
+| EMPLOYED_YEARS | 0.1991 | warn | no, correlated with age |
+| NAME_INCOME_TYPE | 0.1255 | warn | no, correlated with age |
+| EXT_SOURCE_1 | 0.1049 | warn | no, correlated with the other bureau scores |
+| ID_PUBLISH_YEARS | 0.0724 | ok | no |
+| ... | | | |
+| NAME_EDUCATION_TYPE | 0.0134 | ok | no |
+| CODE_GENDER | 0.0072 | ok | no |
+
+The three characteristics I injected the shift into rank first, second and third. The next
+three are the ones genuinely correlated with them, which is correct behaviour rather than
+noise. Characteristics I did not touch stayed flat, `CODE_GENDER` at 0.0072. An analyst
+handed this alert would be pointed at the bureau scores and the age mix immediately.
+
+Every alert record carries the metric, window, value, threshold, the consecutive run, the
+specific window ids behind it and the attributed characteristics:
+
+```
+[2026-08-15T01:13:11.355+00:00] window 13 | psi_score | 0.6414 vs 0.25 | 3 consecutive
+   breach windows: [11, 12, 13]
+   attributed: ['EXT_SOURCE_3', 'EXT_SOURCE_2', 'AGE_YEARS']
+```
+
+## The dashboard
+
+`make dashboard`, on port 8501. Stability trends plotted against their thresholds with alert
+windows marked, characteristic attribution ranked and selectable, approval rate and mean
+predicted PD against their training baselines, the alert table with its audit trail, and the
+monitor run history including the wake ups that found nothing to do.
+
+The simulation warning is the first thing on the page.
+
+## Tests
+
+124 tests, `make test`, roughly 11 seconds.
+
+| File | Covers |
+|---|---|
+| `test_alerting.py` | debounce, cooldown, gap resets, the attribution tier, audit trail |
+| `test_monitor.py` | window claiming, partial windows, flush, the debounce through the store |
+| `test_drift.py` | the index against a hand computed value, empty bins, attribution |
+| `test_api.py` | endpoint, 13 parameterised validation cases, rejected requests not logged |
+| `test_features.py` | derivations, the sentinel, single record equals batch record |
+| `test_binning.py` | monotonicity, missing bins, unseen categories, bins agree with weights |
+| `test_store.py` | round trips, window claiming, schema migration |
+| `test_dashboard.py` | the dashboard script runs, empty and populated |
+
+Three of these tests exist because they caught something during the build rather than after:
+the schema migration test reproduces an actual failure where adding a column to the alerts
+table did nothing to an existing database, and the dashboard tests caught an invalid emoji
+argument that would have crashed the page on load and a cache key that returned the wrong
+store's data.
+
+## Repository layout
+
+```
+src/
+  config.py      typed access to config/config.yaml, no thresholds hard coded in logic
+  features.py    raw fields to model features, the one shared transformation path
+  binning.py     monotonic WOE binning, plus the bin assignment the CSI needs
+  scorecard.py   logistic on WOE, points scaling, the frozen serving artifact
+  train.py       fit, evaluate, freeze the artifact and the reference distributions
+  schemas.py     the request contract and its validation rules
+  scoring.py     the scoring path, transport agnostic
+  api.py         FastAPI app
+  store.py       SQLite store, with an additive schema migration
+  drift.py       PSI, CSI, band drift
+  alerting.py    debounce, cooldown, the attribution tier
+  monitor.py     the scheduled loop
+  stream.py      the simulated traffic generator
+dashboard/app.py
+scripts/
+  run_end_to_end.py     the documented entrypoint behind every number here
+  window_size_noise.py  the measured justification for the window size
+  validate_compose.py   what can be checked without a Docker daemon
+docs/business_case.md
+```
+
+## Honest assessment
+
+What this demonstrates: a model served behind a real API with validation strict enough to be
+useful, a monitoring system that runs on a schedule against a frozen training baseline and
+keeps working, and an alerting design where the interesting decisions are about restraint.
+The window size is justified by measurement rather than convention. The attribution points at
+the right characteristics. I found and fixed three real defects during the build and wrote
+tests for each.
+
+Where it is weak, and I would rather say this than have it drawn out of me:
+
+- **Local Docker Compose is not production infrastructure, and here it is not even verified.**
+  No image was built and no container was run. This is the single biggest gap in the project.
+- **The scoring stream is a documented simulation.** Real applications, real model, real HTTP,
+  constructed arrival order, and a drift I injected myself. It proves the mechanism responds.
+  It says nothing about how this population behaves in reality.
+- **The alert thresholds are stated assumptions.** 0.10 and 0.25 are convention. They are not
+  calibrated against real incident data, because there is none. The noise floor beneath them
+  is measured, which is a different and weaker claim than calibration.
+- **`SK_ID_CURR` order is a proxy for time.** The dataset has no date column. The held out
+  slice is genuinely held out from fitting, but "later" is an assumption.
+- **Nothing here monitors whether the model is still right.** Stability indices watch inputs
+  and outputs. A card can be perfectly stable and quietly stop ranking risk. Catching that
+  needs back testing against realised defaults, which this extract cannot support.
+- **SQLite and a single threaded API are demonstration scale.** 171 requests per second is
+  fine for this and nowhere near a real origination platform.
+- **One model, no challenger.** A mature monitoring setup benchmarks the champion against
+  something.
+
+## License
+
+MIT, see `LICENSE`.

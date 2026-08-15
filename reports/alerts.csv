@@ -1,0 +1,5 @@
+id,fired_at,window_id,metric,feature,value,threshold,severity,consecutive_windows,breach_window_ids,message,attributed_features
+1,2026-08-15T08:17:38.752+00:00,13,psi_score,score,0.6414463732323653,0.25,alert,3,"[11, 12, 13]","psi_score for 'score' held at or above 0.25 for 3 consecutive windows, reaching 0.6414 in window 13","[""EXT_SOURCE_3"", ""EXT_SOURCE_2"", ""AGE_YEARS""]"
+2,2026-08-15T08:17:38.754+00:00,13,psi_band,band,0.5467554107345183,0.25,alert,3,"[11, 12, 13]","psi_band for 'band' held at or above 0.25 for 3 consecutive windows, reaching 0.5468 in window 13","[""EXT_SOURCE_3"", ""EXT_SOURCE_2"", ""AGE_YEARS""]"
+3,2026-08-15T08:17:38.842+00:00,18,psi_score,score,0.5481687213859218,0.25,alert,8,"[11, 12, 13, 14, 15, 16, 17, 18]","psi_score for 'score' held at or above 0.25 for 8 consecutive windows, reaching 0.5482 in window 18","[""EXT_SOURCE_3"", ""EXT_SOURCE_2"", ""AGE_YEARS""]"
+4,2026-08-15T08:17:38.844+00:00,18,psi_band,band,0.4304789019108871,0.25,alert,8,"[11, 12, 13, 14, 15, 16, 17, 18]","psi_band for 'band' held at or above 0.25 for 8 consecutive windows, reaching 0.4305 in window 18","[""EXT_SOURCE_3"", ""EXT_SOURCE_2"", ""AGE_YEARS""]"

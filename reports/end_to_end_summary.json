@@ -1,0 +1,14 @@
+{
+  "requests_scored": 40000,
+  "requests_rejected": 0,
+  "windows_processed": 20,
+  "alerts_fired": 4,
+  "metric_rows": 340,
+  "wall_clock_seconds": 236.2,
+  "latency_ms": {
+    "mean": 4.2,
+    "p50": 4.12,
+    "p95": 4.93,
+    "p99": 5.82
+  }
+}

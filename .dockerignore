@@ -1,0 +1,25 @@
+# The raw Kaggle file is roughly 158 MB and is bind mounted at run time, so it must never be
+# sent to the daemon as build context.
+data/
+models/
+reports/
+notebooks/
+
+.git/
+.gitignore
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+.DS_Store
+.env
+*.db
+*.db-wal
+*.db-shm
+README.md
+PROGRESS.md
+docs/
