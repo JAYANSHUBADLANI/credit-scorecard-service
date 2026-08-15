@@ -1,0 +1,99 @@
+# The whole system: train once, serve, generate the simulated stream, monitor on a schedule,
+# and watch it. `docker compose up` stands all of it up in dependency order.
+#
+# NOTE ON VERIFICATION: no Docker daemon was available in the environment where this was
+# built, so this file and the Dockerfile have not been built or run here. What was verified
+# is covered in README, "Containerisation, and what is not verified". Treat the container
+# path as reviewed but untested, and the local path as the one with measured output behind it.
+
+services:
+
+  # One shot. Fits the card and writes models/scorecard.joblib, then exits. Everything else
+  # waits for it to exit cleanly, so the API can never come up on a missing or half written
+  # artifact.
+  trainer:
+    build: .
+    image: credit-scorecard-service:1.0.0
+    command: ["python", "-m", "src.train"]
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./reports:/app/reports
+    restart: "no"
+
+  api:
+    build: .
+    image: credit-scorecard-service:1.0.0
+    command: ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    depends_on:
+      trainer:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=4).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # The simulated traffic generator. It is an ordinary HTTP client: it posts held out
+  # applications to /score exactly as any caller would, so the scoring log is written by the
+  # API itself rather than by a back door into the database. It exits when the stream is done.
+  stream:
+    build: .
+    image: credit-scorecard-service:1.0.0
+    command: ["python", "-m", "src.stream", "--api-url", "http://api:8000"]
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: "no"
+
+  # The monitoring layer. Wakes on an interval, claims any complete window of new scored
+  # requests, computes the stability indices against the training time reference, and applies
+  # the debounce rule before writing an alert. Long running by design: the point of the
+  # project is that this keeps running, not that it produces one number.
+  monitor:
+    build: .
+    image: credit-scorecard-service:1.0.0
+    command: ["python", "-m", "src.monitor", "--loop", "--interval", "10"]
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./reports:/app/reports
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  dashboard:
+    build: .
+    image: credit-scorecard-service:1.0.0
+    command:
+      - "streamlit"
+      - "run"
+      - "dashboard/app.py"
+      - "--server.port=8501"
+      - "--server.address=0.0.0.0"
+      - "--server.headless=true"
+      - "--browser.gatherUsageStats=false"
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+# Bind mounts are used rather than named volumes on purpose. The raw Kaggle CSV has to come in
+# from the host, and the SQLite file, the fitted artifact and the reports are things worth
+# being able to open directly after a run rather than having to exec into a container to find.

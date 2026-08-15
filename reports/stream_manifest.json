@@ -1,0 +1,29 @@
+{
+  "note": "Simulated scoring traffic. Every application is a real, unmodified row from the held out slice. The arrival order is constructed, and the drifted regime reweights which real applications arrive. No feature value is synthetic.",
+  "api_url": "http://127.0.0.1:8000",
+  "holdout_rows_available": 92254,
+  "requests_sent": 40000,
+  "requests_accepted": 40000,
+  "requests_rejected": 0,
+  "reject_examples": [],
+  "batches": 200,
+  "requests_per_batch": 200,
+  "elapsed_seconds": 233.4,
+  "requests_per_second": 171.4,
+  "regime_counts": {
+    "stable": 16000,
+    "drifted": 24000
+  },
+  "parameters": {
+    "total_requests": 40000,
+    "stable_fraction": 0.4,
+    "drift_strength": 1.5,
+    "drift_ramp_fraction": 0.3,
+    "drift_features": [
+      "EXT_SOURCE_2",
+      "EXT_SOURCE_3",
+      "AGE_YEARS"
+    ],
+    "seed": 20240815
+  }
+}
