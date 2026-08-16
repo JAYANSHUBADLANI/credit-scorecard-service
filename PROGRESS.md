@@ -2,12 +2,13 @@
 
 Running status for this project. Updated as phases complete.
 
-## Status: all four phases complete, with one caveat
+## Status: all four phases complete, plus a cloud deployment
 
-The caveat is Phase 2. The Dockerfile and docker-compose.yml are written and statically
-checked, but they have never been built or run, because there is no Docker daemon in the
-environment this was built in. Everything else was executed and every number quoted in the
-README comes from a real run.
+The Phase 2 caveat is closed. The container path was written and statically checked for a long
+time without ever being built, because there was no Docker daemon available. That has now been
+built, run, and deployed. The API is live on Google Cloud Run at
+https://credit-scorecard-api-403429711696.us-central1.run.app, and `/docs` is the useful entry
+point. Every number quoted in the README comes from a real run.
 
 ## Phase by phase
 
@@ -23,18 +24,20 @@ README comes from a real run.
 - Verified that the served score matches offline batch scoring on 200 held out applications:
   maximum difference 0.005 points, which is the response rounding, and zero band mismatches.
 
-### Phase 2, containerisation: written, not verified
+### Phase 2, containerisation: done and verified
 
 - `Dockerfile` (one image, four roles) and `docker-compose.yml` (trainer, api, stream,
   monitor, dashboard) are written, with dependency ordering, a healthcheck and a non-root
   user.
-- `make compose-check` runs `scripts/validate_compose.py`, which checks what can be checked
-  without a daemon: dependency targets exist, healthcheck conditions have a healthcheck to
-  wait on, bind mount sources exist, command modules exist, ports do not collide, the
-  Dockerfile copies everything the commands need, dependencies are pinned, and the raw CSV is
-  excluded from build context. It currently passes.
-- **Not done and cannot be done here: building the image and running the stack.** See the
-  README section "Containerisation, and what is not verified".
+- `make compose-check` runs `scripts/validate_compose.py`, which checks the structural things
+  cheaply: dependency targets exist, healthcheck conditions have a healthcheck to wait on, bind
+  mount sources exist, command modules exist, ports do not collide, the Dockerfile copies
+  everything the commands need, dependencies are pinned, and the raw CSV is excluded from build
+  context. It passes.
+- **Built and run.** `docker compose up trainer` fitted the card inside the container on all
+  215,257 rows and exited 0, reproducing holdout AUC 0.7463 and Gini 0.4927. `api` came up
+  healthy and returned 592.64 in band `approve` for a complete application. `dashboard` served
+  HTTP 200.
 
 ### Phase 3, the stream, the monitoring layer and alerting: done
 
@@ -55,6 +58,25 @@ README comes from a real run.
   window mechanics, the debounce, the store and the dashboard.
 - Single entrypoint: `make demo`.
 - Business write up in `docs/business_case.md`.
+
+### Phase 5, cloud deployment: api done, the rest open
+
+- The API is deployed to Google Cloud Run in `us-central1`, 512Mi, capped at 2 instances, and
+  is publicly reachable. Verified against the live URL, not a local run: `/health` 200 with
+  matching model metadata, `/score` 200 returning the same 592.64 and band `approve` the local
+  container returned, a malformed `/score` 422 with field by field errors, `/docs` 200, and `/`
+  404 since no route is defined there. Median round trip 0.365s over 10 warm requests, which is
+  mostly the distance to `us-central1`.
+- `Dockerfile.cloudrun` is a second image that bakes the trained artifact in, because Cloud Run
+  has no bind mounts to supply it the way compose does. `Dockerfile.cloudrun.dockerignore` is
+  the per Dockerfile ignore file that lets `models/` through. The local Dockerfile is unchanged,
+  so local development still trains fresh on every run.
+- Verified the deployed shape locally first by running that image with no volume mounts at all,
+  `requests_scored: 0` confirming a fresh instance and `/score` returning the identical 592.64.
+- The first build was arm64, this laptop's native architecture, and Cloud Run rejected it with
+  an explicit amd64 requirement. Rebuilt with `--platform=linux/amd64`, which is what is
+  deployed.
+- Only `api` is deployed. `dashboard` and `monitor` are not, see "Still open".
 
 ## Things worth knowing that came out of building it
 
@@ -84,11 +106,29 @@ README comes from a real run.
 
 ## Still open
 
-1. **The container path has never been verified.** `docker compose up --build`, then check
-   `http://localhost:8000/health` and `http://localhost:8501`. If it needs fixes, they will most
-   likely be in the pinned wheels resolving on linux/amd64, or bind mount permissions on Linux.
-2. **No remote exists yet.** This has stayed local so far; it goes up on GitHub once the above
-   is checked.
+1. **The monitor needs rearchitecting before it can be deployed.** It is a long running loop,
+   and a loop on Cloud Run means paying for an always on minimum instance. The right shape is a
+   Cloud Run Job on a Cloud Scheduler trigger, invoked per run rather than looping forever. That
+   is a change to how the monitor is entered, not a deployment command, which is why it is not
+   done yet.
+2. **The dashboard is not deployed.** Unlike the monitor this one is straightforward, a second
+   Cloud Run service pointed at the same image with the Streamlit command. The open question is
+   whether it is worth it given the point below about the database.
+3. **The SQLite store does not persist on Cloud Run.** No bind mount exists there, so
+   `requests_scored` and the drift history reset when an instance is recycled. Scoring itself is
+   unaffected. Moving the store to Cloud SQL or Firestore is what would fix it properly, and it
+   is a precondition for the dashboard being useful when deployed.
+4. **No CI/CD.** The build, push and deploy were run by hand. Cloud Build triggered on a push to
+   `main` is the obvious next step.
+5. **No Cloud Monitoring dashboard.** Latency and error rates have only been observed through
+   curl timings, not through Cloud Monitoring.
+6. **Secret Manager is not needed and was not added.** I checked before building anything for
+   it: the service holds no credentials, no API keys and no database password, since the config
+   is thresholds and feature lists and the store is a local SQLite file. Adding Secret Manager
+   here would be infrastructure for a problem that does not exist. It becomes relevant if the
+   store moves to Cloud SQL or if authentication is put in front of `/score`.
+7. **`/score` is unauthenticated and `/docs` is public.** A deliberate choice for a public
+   portfolio demo over a public Kaggle dataset, and the wrong choice for anything real.
 
 `.gitignore` commits all of `reports/`, about 100 KB, because those files are the evidence
 behind every number in the README, and excluding them would make the claims uncheckable without
@@ -99,7 +139,9 @@ the 24 MB SQLite store, and the 50 KB fitted artifact are all excluded.
 
 These are in the README too, deliberately, because an interviewer will find them:
 
-- Local Docker Compose is not production infrastructure, and here it is not even verified.
+- The deployment is one container on Cloud Run, not production infrastructure. It is genuinely
+  built, deployed and serving, but with the model baked into the image, a non durable SQLite
+  store, no authentication and no CI/CD, and with the monitor and dashboard not deployed at all.
 - The scoring stream is a documented simulation built from real held out data, not real
   traffic, and the drift in it was deliberately injected by me.
 - The alert thresholds are the conventional 0.10 and 0.25, a stated assumption rather than a

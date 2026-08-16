@@ -1,6 +1,6 @@
 {
   "model_version": "1.0.0",
-  "trained_at": "2026-08-15T00:55:10+00:00",
+  "trained_at": "2026-08-16T09:31:50+00:00",
   "training_rows": 215257,
   "holdout_rows": 92254,
   "training_bad_rate": 0.08126,

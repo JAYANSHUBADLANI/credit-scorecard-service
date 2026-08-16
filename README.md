@@ -1,6 +1,8 @@
 # Credit scorecard serving and drift monitoring
 
-I built a scoring API for an application credit scorecard, containerised it, and then built a
+I built a scoring API for an application credit scorecard, containerised it, deployed it to
+Google Cloud Run where it is
+[live now](https://credit-scorecard-api-403429711696.us-central1.run.app/docs), and then built a
 drift monitoring system on top of it that keeps running: a stream of scoring requests, rolling
 population and characteristic stability indices against the training time reference, threshold
 alerting with a debounce so it does not fire on noise, and a dashboard showing all of it.
@@ -106,11 +108,16 @@ Then to look at it:
 make dashboard
 ```
 
-The containerised path, which has **not** been run here, see the section below:
+The containerised path, which stands up all five services in dependency order:
 
 ```bash
 docker compose up --build
 ```
+
+The API is also deployed and live on Google Cloud Run, see "Containerisation and cloud
+deployment" below:
+
+**https://credit-scorecard-api-403429711696.us-central1.run.app/docs**
 
 ## Getting the data
 
@@ -195,37 +202,121 @@ Measured over the 40,000 request run: mean latency 4.2 ms, p95 4.9 ms, 171.4 req
 second single threaded, 0 rejections. See `reports/end_to_end_summary.json` for the full
 latency distribution and `reports/stream_manifest.json` for the throughput figure.
 
-## Containerisation, and what is not verified
+## Containerisation and cloud deployment
 
-**The image has never been built and the stack has never been run.** There was no Docker
-daemon available in the environment where I built this. I am stating that plainly rather than
-implying otherwise, because the difference between "I wrote a Dockerfile" and "I ran this in a
-container" is exactly what an interviewer is probing for.
+An earlier version of this README said the image had never been built and the stack had never
+been run. That is no longer true. The stack has been built and run locally, and the API is
+deployed and serving on Google Cloud Run:
 
-What exists: a single image serving four roles, chosen by command rather than built four
+**https://credit-scorecard-api-403429711696.us-central1.run.app/docs**
+
+That link is the interactive API documentation, which is the useful thing to open in a browser.
+The bare root path returns 404 on purpose, since no route is defined there.
+
+### What runs locally
+
+`docker compose up --build` stands up the whole thing. What I actually observed running it:
+
+- `trainer` fitted the card inside the container on the full 215,257 rows and exited 0. It
+  reproduced the holdout figures quoted throughout this README, AUC 0.7463 and Gini 0.4927, so
+  the containerised training path is not a different pipeline that happens to run.
+- `api` came up and passed its healthcheck.
+- A `/score` request with a complete application returned 592.64 in band `approve`, consistent
+  with the band cutoffs the trainer itself wrote, decline below 532.25 and refer below 553.34.
+- `dashboard` served HTTP 200.
+
+The structure is a single image serving four roles, chosen by command rather than built four
 times, dependencies installed before source is copied so editing a module does not invalidate
 the slow layer, a non-root user, a healthcheck, and a compose file with five services in
-dependency order. `trainer` runs once and must exit cleanly before `api` starts, so the API
-can never come up on a missing artifact. `stream`, `monitor` and `dashboard` wait for the API
-to report healthy. Data, the artifact and the SQLite file are bind mounted rather than baked
-in.
+dependency order. `trainer` runs once and must exit cleanly before `api` starts, so the API can
+never come up on a missing artifact. `stream`, `monitor` and `dashboard` wait for the API to
+report healthy. Data, the artifact and the SQLite file are bind mounted rather than baked in.
 
-What I could verify without a daemon, via `make compose-check`:
+`make compose-check` still exists and still passes. It is a static check that catches the
+structural mistakes cheaply, a `depends_on` target that does not exist, a command pointing at a
+renamed module, a missing bind mount source, a duplicated port. It is no longer the only
+evidence, but it is faster than a build when something structural changes.
 
-- every `depends_on` target exists and every condition is a real compose condition
-- every service waited on with `service_healthy` actually declares a healthcheck
-- every bind mount source path exists
-- every command points at a module or script that exists
-- no two services publish the same host port
-- the Dockerfile copies everything the commands need, and runs as a non-root user
-- all 13 dependencies are pinned, so the image is reproducible
-- `.dockerignore` excludes the 158 MB CSV from build context
+### Why there are two Dockerfiles
 
-That check currently passes. It cannot tell you whether the image builds, whether the pinned
-wheels resolve on linux/amd64, or whether the containers can reach each other. Please run
-`docker compose up --build` before relying on it. If it needs fixes I would expect them in
-wheel resolution, or in bind mount permissions on a Linux host, which the Dockerfile comments
-address.
+`Dockerfile` is the local one. It deliberately leaves the model out, because `.dockerignore`
+excludes `models/` and compose trains a fresh artifact into a bind mount on every run. For
+local development that is the right shape.
+
+Cloud Run has no bind mounts and no host filesystem to mount from, so an image deployed there
+has to be self contained. `Dockerfile.cloudrun` is the same image plus `COPY models/ ./models/`,
+paired with `Dockerfile.cloudrun.dockerignore`, which is Docker's per Dockerfile ignore file
+convention and lets `models/` through while keeping every other exclusion. Two Dockerfiles for
+two genuinely different deployment shapes, rather than one Dockerfile awkwardly serving both and
+breaking local development in the process.
+
+I checked the deployed shape before pushing it anywhere, by running the Cloud Run image locally
+with no volume mounts at all. `/health` reported `requests_scored: 0`, confirming a genuinely
+fresh instance rather than one reading a leftover database, and `/score` returned the same
+592.64. So the baked in artifact is the right one, not merely present.
+
+### Getting it onto Cloud Run
+
+The first build was arm64, which is this laptop's native architecture, and Cloud Run rejected it
+outright with an explicit error requiring amd64. The rebuild used `--platform=linux/amd64` and
+that is the image that is deployed. Worth keeping in mind if you rebuild on Apple silicon,
+because nothing else in the toolchain warns you.
+
+```bash
+docker build --platform=linux/amd64 -f Dockerfile.cloudrun \
+  -t us-central1-docker.pkg.dev/PROJECT/credit-scorecard-service/api:1.0.0 .
+docker push us-central1-docker.pkg.dev/PROJECT/credit-scorecard-service/api:1.0.0
+gcloud run deploy credit-scorecard-api \
+  --image=us-central1-docker.pkg.dev/PROJECT/credit-scorecard-service/api:1.0.0 \
+  --region=us-central1 --memory=512Mi --max-instances=2 --allow-unauthenticated
+```
+
+`--max-instances=2` is deliberate. The service is genuinely open to the internet, so the cap is
+what bounds the cost of that.
+
+### What the live service actually does
+
+Checked against the deployed URL, not against a local run:
+
+| Request | Result |
+| --- | --- |
+| `GET /health` | 200, model version 1.0.0, 15 features, matching `trained_at` |
+| `POST /score`, complete application | 200, score 592.64, PD 0.025159, band `approve` |
+| `POST /score`, missing fields | 422, field by field validation errors |
+| `GET /docs` | 200 |
+| `GET /` | 404, no route defined |
+
+The score returned by the deployed service is identical to the one the local container returned,
+which is the point of baking the artifact in rather than refitting per environment.
+
+Round trip latency from my machine is a median of 0.365s over 10 warm requests. That figure is
+mostly distance to `us-central1` and says very little about the service, which handles these
+requests in single digit milliseconds locally. I am quoting it because it is what I measured,
+not because it is a meaningful throughput number.
+
+### What is deployed and what is not
+
+Only `api` is on Cloud Run. `dashboard` and `monitor` are not, and I would rather say why than
+leave it looking like an oversight. The dashboard would be a straightforward second Cloud Run
+service. The monitor is not, because it is a long running loop, and a perpetual loop on Cloud
+Run means paying for an always on minimum instance. The honest shape for it is a Cloud Run Job
+on a Cloud Scheduler trigger rather than a loop that never ends, which is a rewrite of how the
+monitor is invoked rather than a deployment command. I have not done that yet.
+
+### Known limitations of this deployment
+
+- **The SQLite store does not survive a restart.** Cloud Run's filesystem is writable for the
+  life of an instance but not durable across restarts or scale events, and there is no bind
+  mount to point at the way local development has. Scoring is correct on every request, but
+  `requests_scored` and the drift history reset whenever Cloud Run recycles the container. A
+  production version would put that store in Cloud SQL or Firestore. This is the main reason the
+  monitoring half of this project is best seen by running it locally.
+- **`/docs` is public.** This is a considered choice rather than an oversight. The project is a
+  demonstration over a public Kaggle dataset and there is nothing confidential in the schema. A
+  real deployment would gate or disable it, along with putting authentication in front of
+  `/score`.
+- **There is no CI/CD.** The build and deploy above were run by hand. Wiring Cloud Build to
+  deploy on a push to `main` is the obvious next step and is not done.
 
 ## The simulated scoring stream
 
@@ -449,8 +540,12 @@ dashboard/app.py
 scripts/
   run_end_to_end.py     the documented entrypoint behind every number here
   window_size_noise.py  the measured justification for the window size
-  validate_compose.py   what can be checked without a Docker daemon
+  validate_compose.py   structural checks on the compose setup, no daemon needed
 docs/business_case.md
+Dockerfile                        local image, model trained into a bind mount
+Dockerfile.cloudrun               Cloud Run image, model baked in, self contained
+Dockerfile.cloudrun.dockerignore  per Dockerfile ignore file, lets models/ through
+docker-compose.yml                the five service local stack
 ```
 
 ## Honest assessment
@@ -464,8 +559,11 @@ tests for each.
 
 Where it is weak, and I would rather say this than have it drawn out of me:
 
-- **Local Docker Compose is not production infrastructure, and here it is not even verified.**
-  No image was built and no container was run. This is the single biggest gap in the project.
+- **The deployment is a single container, not production infrastructure.** The API is genuinely
+  built, deployed and serving on Cloud Run, which is more than a Dockerfile nobody ran, but it is
+  one service with an in image model, a non durable SQLite store, no authentication, no CI/CD and
+  no autoscaling story beyond a two instance cap. The monitor and dashboard are not deployed at
+  all. Standing something up is the easy half of this.
 - **The scoring stream is a documented simulation.** Real applications, real model, real HTTP,
   constructed arrival order, and a drift I injected myself. It proves the mechanism responds.
   It says nothing about how this population behaves in reality.

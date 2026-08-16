@@ -1,0 +1,43 @@
+# Separate from the main Dockerfile on purpose. The main image deliberately leaves the model
+# out and expects docker-compose to train it into a bind mount, that is the right shape for
+# local dev where the model gets refit on every `compose up`. Cloud Run has no bind mounts and
+# no host filesystem to mount from, an image deployed there has to be fully self-contained, so
+# this bakes in the already-trained artifact instead. Two Dockerfiles for two genuinely
+# different deployment shapes, not one Dockerfile awkwardly serving both.
+#
+# Known limitation, disclosed rather than hidden: Cloud Run's local filesystem is writable for
+# the life of an instance but not durable across restarts or scale events, so
+# data/monitoring.db resets whenever Cloud Run recycles the container. Scoring still works
+# correctly per request, this only affects the running count of requests_scored and the
+# monitor's drift history surviving long term. A production version would move that store to
+# Cloud SQL or Firestore instead of local SQLite.
+
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src/ ./src/
+COPY dashboard/ ./dashboard/
+COPY config/ ./config/
+COPY models/ ./models/
+
+RUN mkdir -p /app/data/raw /app/data/processed /app/reports
+
+RUN useradd --create-home --uid 1000 appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=4).status==200 else 1)"
+
+CMD ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000"]
