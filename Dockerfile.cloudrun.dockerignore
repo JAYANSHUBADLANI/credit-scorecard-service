@@ -1,0 +1,26 @@
+# Overrides .dockerignore for Dockerfile.cloudrun specifically (Docker's per-Dockerfile
+# ignore-file convention). Same exclusions as the main .dockerignore except models/, which
+# this build needs to bake in since Cloud Run has no bind mounts to supply it at runtime.
+
+data/
+reports/
+notebooks/
+
+.git/
+.gitignore
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+.DS_Store
+.env
+*.db
+*.db-wal
+*.db-shm
+README.md
+PROGRESS.md
+docs/

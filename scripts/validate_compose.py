@@ -1,14 +1,15 @@
-"""Static checks on the container setup, for an environment with no Docker daemon.
+"""Static checks on the container setup, runnable without a Docker daemon.
 
-This exists because the compose file in this repository has never been built or run. That is
-stated plainly in the README rather than glossed over. What can still be checked without a
-daemon is checked here, and it catches the errors that are actually common: a service that
-depends on one that does not exist, a command pointing at a module that was renamed, a bind
-mount whose host path is missing, a port declared twice.
+This originally existed because there was no daemon available to build with. The stack has
+since been built, run, and deployed, so this is no longer the only evidence that the container
+path works. It stays because it is a great deal faster than a build and it catches the errors
+that are actually common when the compose file changes: a service that depends on one that does
+not exist, a command pointing at a module that was renamed, a bind mount whose host path is
+missing, a port declared twice.
 
 What it cannot tell you is whether the image builds, whether the pinned wheels resolve on
-linux/amd64, or whether the containers can reach each other. Run `docker compose config` and
-then `docker compose up` on a machine with Docker to find that out.
+linux/amd64, or whether the containers can reach each other. Run `docker compose up --build` for
+that.
 """
 
 from __future__ import annotations
@@ -151,8 +152,9 @@ def main() -> int:
 
     print("\nno structural problems found.")
     print(
-        "This is a static check only. The image has not been built and the stack has not been "
-        "run. See README, 'Containerisation, and what is not verified'."
+        "This is a static check only. It does not build the image or start the stack, run "
+        "`docker compose up --build` for that. See README, 'Containerisation and cloud "
+        "deployment'."
     )
     return 0
 

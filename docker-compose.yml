@@ -1,10 +1,11 @@
 # The whole system: train once, serve, generate the simulated stream, monitor on a schedule,
 # and watch it. `docker compose up` stands all of it up in dependency order.
 #
-# NOTE ON VERIFICATION: no Docker daemon was available in the environment where this was
-# built, so this file and the Dockerfile have not been built or run here. What was verified
-# is covered in README, "Containerisation, and what is not verified". Treat the container
-# path as reviewed but untested, and the local path as the one with measured output behind it.
+# This stack has been built and run. The trainer fits the card inside the container and exits
+# 0, the API comes up healthy and scores correctly, and the dashboard serves. The API is also
+# deployed to Google Cloud Run from Dockerfile.cloudrun, which is a separate image because
+# Cloud Run has no bind mounts and needs the model baked in. See README, "Containerisation and
+# cloud deployment", for what was observed and for the limitations of the deployed version.
 
 services:
 
