@@ -72,6 +72,12 @@ class ScoringService:
         """Score many validated payloads through the same path a single request takes."""
         if not payloads:
             return []
+        if request_ids is not None and len(request_ids) != len(payloads):
+            raise ValueError(
+                f"got {len(request_ids)} request ids for {len(payloads)} payloads. Scoring "
+                "them anyway would attach the wrong id to a decision, or raise several rows "
+                "further in with nothing to say which caller it belonged to."
+            )
 
         raw = pd.DataFrame(payloads)
         features = build_features(raw)
@@ -83,22 +89,25 @@ class ScoringService:
 
         ids = request_ids or [str(uuid.uuid4()) for _ in payloads]
         scored_at = utc_now()
-        results = []
-        for i in range(len(payloads)):
-            results.append(
-                ScoringResult(
-                    request_id=ids[i],
-                    score=float(score[i]),
-                    probability=float(probability[i]),
-                    band=str(band[i]),
-                    bin_indices={
-                        column: int(bins.iloc[i][column]) for column in bins.columns
-                    },
-                    model_version=self.artifact.model_version,
-                    scored_at=scored_at,
-                )
+        # One dict per row rather than a cell lookup per characteristic. The old form indexed
+        # the frame len(payloads) * len(columns) times, which on a batch replay is the whole
+        # cost of scoring spent on pandas rather than on the model.
+        indices = [
+            {column: int(value) for column, value in row.items()}
+            for row in bins.to_dict(orient="records")
+        ]
+        return [
+            ScoringResult(
+                request_id=ids[i],
+                score=float(score[i]),
+                probability=float(probability[i]),
+                band=str(band[i]),
+                bin_indices=indices[i],
+                model_version=self.artifact.model_version,
+                scored_at=scored_at,
             )
-        return results
+            for i in range(len(payloads))
+        ]
 
     def reference_proportions(self, feature: str) -> np.ndarray:
         return self.artifact.transformer.bins[feature].reference_proportions

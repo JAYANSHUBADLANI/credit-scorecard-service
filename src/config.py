@@ -121,6 +121,27 @@ class Config:
         return candidate if candidate.is_absolute() else self.root / candidate
 
 
+def _derive_root(config_path: Path) -> Path:
+    """Work out the project root a relative config path should resolve against.
+
+    Every relative path in the config, the database, the artifact, the reports, resolves
+    against this. Guessing it is worse than refusing to: the previous version took the config
+    file's grandparent unconditionally, so a config placed anywhere else silently pointed the
+    whole system at a tree that did not exist, created it on first write, and reported no
+    error at all. A wrong path that works is harder to find than one that fails.
+
+    So the layout is either the documented one or it is stated explicitly.
+    """
+    if config_path.parent.name == "config":
+        return config_path.parents[1]
+    raise ValueError(
+        f"cannot derive the project root from {config_path}. Every relative path in the "
+        "config resolves against the root, so guessing it would quietly point the database, "
+        "the model and the reports at the wrong tree. Either put the file at "
+        "<root>/config/<name>.yaml, or pass root= to load_config, or set PROJECT_ROOT."
+    )
+
+
 def _as_dict(raw: Dict[str, Any], key: str) -> Dict[str, Any]:
     section = raw.get(key)
     if not isinstance(section, dict):
@@ -128,11 +149,20 @@ def _as_dict(raw: Dict[str, Any], key: str) -> Dict[str, Any]:
     return section
 
 
-def load_config(path: Path | str | None = None) -> Config:
-    """Read the YAML config. The CONFIG_PATH environment variable overrides the default."""
-    resolved = Path(path or os.environ.get("CONFIG_PATH") or DEFAULT_CONFIG_PATH)
+def load_config(path: Path | str | None = None, root: Path | str | None = None) -> Config:
+    """Read the YAML config.
+
+    `CONFIG_PATH` overrides the default location, `PROJECT_ROOT` and the `root` argument
+    override where its relative paths resolve to. Without either, the root is derived from the
+    documented `<root>/config/config.yaml` layout, and a config that does not follow it is an
+    error rather than a guess. See `_derive_root`.
+    """
+    resolved = Path(path or os.environ.get("CONFIG_PATH") or DEFAULT_CONFIG_PATH).resolve()
     with open(resolved, "r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle)
+
+    override = root or os.environ.get("PROJECT_ROOT")
+    resolved_root = Path(override).resolve() if override else _derive_root(resolved)
 
     return Config(
         data=DataConfig(**_as_dict(raw, "data")),
@@ -145,5 +175,5 @@ def load_config(path: Path | str | None = None) -> Config:
         monitoring=MonitoringConfig(**_as_dict(raw, "monitoring")),
         stream=StreamConfig(**_as_dict(raw, "stream")),
         service=ServiceConfig(**_as_dict(raw, "service")),
-        root=resolved.resolve().parents[1],
+        root=resolved_root,
     )

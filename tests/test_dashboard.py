@@ -73,3 +73,29 @@ def test_dashboard_runs_against_a_populated_store(monkeypatch, temp_config):
     assert labels["Monitoring windows"] == "4"
     assert int(labels["Alerts fired"]) > 0
     assert labels["Requests scored"] == "800"
+
+
+def test_dashboard_survives_metrics_without_characteristic_indices(monkeypatch, temp_config):
+    """Population indices are recorded for every window, characteristic ones are not.
+
+    A window whose scoring log carries no usable bin indices still produces `psi_score` and
+    `psi_band`, so the page can be reached with a metrics table that has no `csi` rows at all.
+    Indexing straight into that empty pivot took the whole dashboard down with an IndexError.
+    """
+    config = load_config(temp_config)
+    store = Store(config.path(config.service.db_path))
+    store.record_metrics([
+        {
+            "window_id": 1, "window_start_id": 1, "window_end_id": 200, "n_records": 200,
+            "metric": metric, "feature": feature, "value": 0.01,
+            "warn_threshold": 0.10, "alert_threshold": 0.25, "status": "ok",
+        }
+        for metric, feature in [("psi_score", "score"), ("psi_band", "band")]
+    ])
+
+    app = run_app(monkeypatch, temp_config)
+    assert not app.exception, app.exception
+
+    headings = " ".join(item.value for item in app.subheader)
+    assert "Characteristic stability" in headings
+    assert any("No characteristic level indices" in str(item.value) for item in app.info)

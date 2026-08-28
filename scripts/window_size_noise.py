@@ -53,7 +53,7 @@ def main() -> None:
                 "feature": name,
                 "bins": len(reference),
                 "window_size": size,
-                "median": values.mean(),
+                "mean": values.mean(),
                 "p50": np.median(values),
                 "p95": np.percentile(values, 95),
                 "max": values.max(),

@@ -42,8 +42,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
-from dataclasses import asdict, dataclass
-from pathlib import Path
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -68,11 +67,7 @@ class StreamStats:
     rejected: int = 0
     batches: int = 0
     elapsed_seconds: float = 0.0
-    reject_examples: List[str] = None
-
-    def __post_init__(self):
-        if self.reject_examples is None:
-            self.reject_examples = []
+    reject_examples: List[str] = field(default_factory=list)
 
 
 def payload_from_row(row: pd.Series) -> Dict[str, Any]:
@@ -98,11 +93,11 @@ def drift_propensity(frame: pd.DataFrame, features: List[str]) -> np.ndarray:
     """
     scores = []
     for feature in features:
-        source = "AGE_YEARS" if feature == "AGE_YEARS" else feature
-        if source == "AGE_YEARS":
+        if feature == "AGE_YEARS":
+            # Derived rather than raw: the holdout slice carries DAYS_BIRTH, not the feature.
             values = -pd.to_numeric(frame["DAYS_BIRTH"], errors="coerce") / 365.25
         else:
-            values = pd.to_numeric(frame[source], errors="coerce")
+            values = pd.to_numeric(frame[feature], errors="coerce")
         mean = values.mean()
         std = values.std()
         if not np.isfinite(std) or std == 0:

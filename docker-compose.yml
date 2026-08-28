@@ -20,6 +20,12 @@ services:
       - ./data:/app/data
       - ./models:/app/models
       - ./reports:/app/reports
+    # The image declares a healthcheck against :8000 because most roles built from it serve
+    # the API. This one does not, and an inherited check it can never pass would leave the
+    # container reporting unhealthy for its whole life. Every role that is not the API either
+    # disables it or states its own.
+    healthcheck:
+      disable: true
     restart: "no"
 
   api:
@@ -55,6 +61,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    healthcheck:
+      disable: true
     restart: "no"
 
   # The monitoring layer. Wakes on an interval, claims any complete window of new scored
@@ -72,6 +80,17 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    # Not a port check, because the monitor does not listen on one. It is a staleness check
+    # on the run log, which is the failure worth catching here: a monitor that has quietly
+    # stopped waking up looks exactly like a monitor with nothing to report. The loop records
+    # every wake up including the idle ones, so a gap wider than six intervals means it
+    # stopped rather than found nothing.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sqlite3,sys,datetime as d; r=sqlite3.connect('/app/data/monitoring.db').execute('SELECT MAX(ran_at) FROM monitor_runs').fetchone()[0]; sys.exit(0 if r and (d.datetime.now(d.timezone.utc)-d.datetime.fromisoformat(r)).total_seconds() < 60 else 1)"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
 
   dashboard:
@@ -87,6 +106,12 @@ services:
       - "--browser.gatherUsageStats=false"
     ports:
       - "8501:8501"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=4).status==200 else 1)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     volumes:
       - ./data:/app/data
       - ./models:/app/models

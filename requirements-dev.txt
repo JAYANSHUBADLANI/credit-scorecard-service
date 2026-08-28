@@ -1,0 +1,6 @@
+# Test tooling only. Kept out of requirements.txt so the runtime image does not ship a test
+# runner: nothing in the container ever invokes it, and a dependency that is present but
+# unused is still a dependency that has to be patched.
+-r requirements.txt
+
+pytest==7.4.4

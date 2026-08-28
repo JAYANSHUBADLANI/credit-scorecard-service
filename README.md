@@ -269,8 +269,13 @@ run, and it is labelled as such rather than quietly refreshed.
 
 The structure is a single image serving four roles, chosen by command rather than built four
 times, dependencies installed before source is copied so editing a module does not invalidate
-the slow layer, a non-root user, a healthcheck, and a compose file with five services in
-dependency order. `trainer` runs once and must exit cleanly before `api` starts, so the API can
+the slow layer, a non-root user, and a compose file with five services in dependency order.
+Each role states its own healthcheck or disables the inherited one: the image declares a check
+against the API port because most roles built from it serve that port, and the two that do not
+would otherwise report unhealthy for their whole life while working perfectly. The monitor's is
+a staleness check on its own run log rather than a port probe, since the failure worth catching
+there is a loop that quietly stopped waking up. `scripts/validate_compose.py` now fails on any
+service that leaves the question unanswered. `trainer` runs once and must exit cleanly before `api` starts, so the API can
 never come up on a missing artifact. `stream`, `monitor` and `dashboard` wait for the API to
 report healthy. Data, the artifact and the SQLite file are bind mounted rather than baked in.
 
@@ -544,7 +549,9 @@ The simulation warning is the first thing on the page.
 
 ## Tests
 
-134 tests, `make test`, roughly 11 seconds.
+141 tests, `make test`, roughly 11 seconds. `make install-dev` first, since the test
+runner is not in `requirements.txt`: nothing in the runtime image invokes pytest, and a
+dependency that ships unused still has to be patched.
 
 | File | Covers |
 |---|---|
@@ -556,6 +563,7 @@ The simulation warning is the first thing on the page.
 | `test_binning.py` | monotonicity, missing bins, unseen categories, bins agree with weights |
 | `test_store.py` | round trips, window claiming, schema migration |
 | `test_contract.py` | the startup contract check, in both directions |
+| `test_config.py` | how the project root is settled, and what happens when it cannot be |
 | `test_dashboard.py` | the dashboard script runs, empty and populated |
 
 Four of these exist because they caught something rather than confirmed something: the

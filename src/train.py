@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Dict, List, Tuple
 
 import joblib
@@ -25,7 +24,7 @@ from sklearn.metrics import roc_auc_score
 
 from .binning import BinningConfig, WOETransformer
 from .config import Config, load_config
-from .features import RAW_CATEGORICAL_INPUTS, RAW_INPUTS, build_features
+from .features import RAW_INPUTS, build_features
 from .drift import BAND_ORDER
 from .scorecard import BandCutoffs, ScalingConfig, Scorecard, ScorecardArtifact, select_features
 
@@ -182,7 +181,6 @@ def train(config: Config | None = None) -> Dict[str, object]:
     model_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(artifact, model_path)
 
-    woe_holdout = transformer.transform(x_holdout)
     scored_train = artifact.score_frame(x_train)
     scored_holdout = artifact.score_frame(x_holdout)
 
