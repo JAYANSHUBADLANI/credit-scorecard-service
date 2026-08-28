@@ -31,8 +31,11 @@ features:
     - ANNUITY_INCOME_RATIO
     - CREDIT_TERM
     - GOODS_CREDIT_RATIO
+  # CODE_GENDER is deliberately absent. Gender is a prohibited basis under ECOA and
+  # Regulation B, and a card that allocates points on it could not be signed off however
+  # well it discriminated. Dropping it costs 0.0014 of holdout AUC, measured, so the trade
+  # is not close. See README, "Characteristics deliberately excluded".
   categorical:
-    - CODE_GENDER
     - NAME_EDUCATION_TYPE
     - NAME_INCOME_TYPE
     - NAME_FAMILY_STATUS

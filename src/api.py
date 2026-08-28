@@ -14,6 +14,7 @@ shift and send someone hunting for a population change that was really a caller 
 
 from __future__ import annotations
 
+import sys
 import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List
@@ -22,6 +23,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from .binning import OTHER_LABEL
 from .config import Config, load_config
 from .schemas import (
     CATEGORICAL_LEVELS,
@@ -54,27 +56,61 @@ state = ServiceState()
 
 
 def verify_contract(scoring: ScoringService) -> None:
-    """Fail startup if the published request contract and the fitted model disagree.
+    """Check the published request contract against the fitted artifact at startup.
 
-    A refit that introduces a new category level, or drops one, silently changes what the
-    service should accept. Catching that at boot is far cheaper than discovering it when
-    every application of some new employment type starts landing in the catch all bin.
+    A refit that changes what the service should accept is the failure this guards against.
+    The two directions of that disagreement are not symmetric, and the first version of this
+    function was wrong to treat them as though they were.
+
+    A level the model was fitted on that the contract does not declare is a hard failure. The
+    API would answer 422 to an application the card was built to score, so real business is
+    refused for as long as the mismatch stands, and nothing in the response says why.
+
+    A level the contract declares that the fit cannot resolve is not a failure. It scores
+    through the catch all bin, which is precisely what `fit_categorical` already does to every
+    level below `min_categorical_fraction`, so no response changes. Refusing to boot over one
+    would take the service down for a distinction the card cannot draw: on this data six of the
+    declared levels share the catch all in a normal fit, two of them resting on two rows in
+    215,000. Under a random split that turned a startup failure into a coin toss. It is
+    worth a line on stderr, not an outage.
     """
     fitted = scoring.artifact.categorical_levels
+    bins = scoring.artifact.transformer.bins
+
     problems: List[str] = []
+    folded: List[str] = []
+
     for field, declared in CATEGORICAL_LEVELS.items():
         actual = fitted.get(field)
         if actual is None:
             problems.append(f"{field}: declared in the API contract but not fitted in the model")
             continue
-        if sorted(actual) != sorted(declared):
+
+        undeclared = sorted(set(actual) - set(declared))
+        if undeclared:
             problems.append(
-                f"{field}: model fitted on {sorted(actual)} but the API contract declares "
-                f"{sorted(declared)}"
+                f"{field}: the model was fitted on {undeclared}, which the API contract does "
+                "not accept, so those applications would be refused rather than scored"
             )
+
+        binning = bins.get(field)
+        resolvable = set(binning.level_to_index) - {OTHER_LABEL} if binning else set()
+        unresolved = sorted(set(declared) - resolvable)
+        if unresolved:
+            folded.append(f"{field}: {unresolved}")
+
     if problems:
         raise RuntimeError(
             "request contract does not match the fitted artifact:\n  " + "\n  ".join(problems)
+        )
+
+    if folded:
+        print(
+            "contract check: accepted levels with no bin of their own in this fit. They score "
+            "through the catch all, which is a distinction the card does not draw:\n  "
+            + "\n  ".join(folded),
+            file=sys.stderr,
+            flush=True,
         )
 
 

@@ -8,8 +8,8 @@
   "reject_examples": [],
   "batches": 200,
   "requests_per_batch": 200,
-  "elapsed_seconds": 233.4,
-  "requests_per_second": 171.4,
+  "elapsed_seconds": 140.12,
+  "requests_per_second": 285.5,
   "regime_counts": {
     "stable": 16000,
     "drifted": 24000
