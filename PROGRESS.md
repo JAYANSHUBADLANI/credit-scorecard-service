@@ -15,9 +15,10 @@ point. Every number quoted in the README comes from a real run.
 ### Phase 1, the scorecard and the scoring API: done
 
 - Refit the simple weight of evidence and logistic scorecard on `application_train.csv`,
-  reusing the established methodology rather than building anything new. 15 characteristics
-  retained from 20 candidates.
-- Holdout Gini 0.4927, KS 0.3687, AUC 0.7463 on 92,254 held out applications.
+  reusing the established methodology rather than building anything new. 14 characteristics
+  retained from 19 candidates, `CODE_GENDER` excluded as a prohibited basis rather than
+  selected out.
+- Holdout Gini 0.4899, KS 0.3674, AUC 0.7449 on 92,254 held out applications.
 - FastAPI `/score`, `/health` and `/model` endpoints.
 - Input validation is strict: no silent coercion of strings to numbers, unknown fields
   rejected rather than ignored, explicit ranges on every field, two cross field rules.
@@ -35,7 +36,8 @@ point. Every number quoted in the README comes from a real run.
   everything the commands need, dependencies are pinned, and the raw CSV is excluded from build
   context. It passes.
 - **Built and run.** `docker compose up trainer` fitted the card inside the container on all
-  215,257 rows and exited 0, reproducing holdout AUC 0.7463 and Gini 0.4927. `api` came up
+  215,257 rows and exited 0, reproducing the holdout figures of the fit current at the time,
+  AUC 0.7463 and Gini 0.4927, before `CODE_GENDER` was removed. `api` came up
   healthy and returned 592.64 in band `approve` for a complete application. `dashboard` served
   HTTP 200.
 
@@ -54,7 +56,7 @@ point. Every number quoted in the README comes from a real run.
 - Streamlit dashboard: stability trends against thresholds, characteristic attribution,
   approval rate and mean predicted PD against their training baselines, the alert table with
   its audit trail, and the monitor run history.
-- 124 tests covering the transformation, the binning, the endpoint, the drift computation, the
+- 134 tests covering the transformation, the binning, the endpoint, the drift computation, the
   window mechanics, the debounce, the store and the dashboard.
 - Single entrypoint: `make demo`.
 - Business write up in `docs/business_case.md`.

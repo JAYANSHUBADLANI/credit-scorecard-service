@@ -100,7 +100,7 @@ make install && make demo
 
 That fits the card, starts the API, posts the simulated stream to it over HTTP, runs the
 monitor over every complete window, writes the history to `reports/`, and prints a summary. It
-took 236 seconds on my machine, see `reports/end_to_end_summary.json` for the exact figure.
+took 143 seconds on my machine, see `reports/end_to_end_summary.json` for the exact figure.
 
 Then to look at it:
 
@@ -138,13 +138,13 @@ kept as their own bin rather than imputed, characteristics kept above an informa
 floor of 0.02 and dropped when correlated above 0.75, logistic regression on the weight of
 evidence columns, scaled to 600 points at 50:1 odds with 20 points per doubling.
 
-15 characteristics retained from 20 candidates. Measured on the 92,254 held out applications:
+14 characteristics retained from 19 candidates. Measured on the 92,254 held out applications:
 
 | Metric | Training | Held out |
 |---|---|---|
-| AUC | 0.7402 | 0.7463 |
-| Gini | 0.4805 | 0.4927 |
-| KS | 0.3560 | 0.3687 |
+| AUC | 0.7387 | 0.7449 |
+| Gini | 0.4774 | 0.4899 |
+| KS | 0.3545 | 0.3674 |
 | Bad rate | 8.13% | 7.95% |
 
 Bands are set as percentiles of the training score distribution and then frozen as absolute
@@ -153,12 +153,34 @@ the held out slice:
 
 | Band | Score | Share | Bad rate |
 |---|---|---|---|
-| Decline | below 532.25 | 9.7% | 25.8% |
-| Refer | 532.25 to 553.34 | 20.2% | 12.5% |
-| Approve | 553.34 and above | 70.2% | 4.2% |
+| Decline | below 532.45 | 9.8% | 25.3% |
+| Refer | 532.45 to 553.26 | 20.0% | 12.6% |
+| Approve | 553.26 and above | 70.2% | 4.2% |
 
 Held out AUC slightly above training is normal for a regularised model on a different slice
 and is not something I have tuned toward.
+
+### Characteristics deliberately excluded
+
+`CODE_GENDER` is not in the model, and it is not in the request contract either.
+
+Gender is a prohibited basis under ECOA and Regulation B. A card that allocates points on it
+cannot be signed off however well it ranks, so the question was never whether the lift
+justified it. I measured the cost anyway, because "it was not worth much" is a weaker claim
+than a number: held out AUC falls from 0.7463 to 0.7449, fourteen ten thousandths, and the
+characteristic ranked eleventh of twenty by information value. It was never load bearing.
+
+Excluding it at the boundary rather than merely dropping it from `features.categorical` is
+deliberate. A field the service still accepts is one refit away from being scored on again,
+and a caller who sends it should be told it was refused rather than left to assume it counted.
+So `CODE_GENDER` is absent from `RAW_INPUTS`, absent from the pydantic request model, and a
+request carrying it comes back 422 naming the field.
+
+What this does not do is make the card fair. Gender remains recoverable from the
+characteristics that stayed, and proxy discrimination through correlated inputs is a real
+effect that removing one column does not touch. Measuring it needs outcome data by protected
+class, which this extract does not carry. Excluding the direct use is the necessary step here,
+not the sufficient one.
 
 ## The scoring API
 
@@ -194,11 +216,22 @@ believed they had sent. And a rejected request is never written to the scoring l
 side bugs cannot contaminate the drift baseline and send someone hunting for a population
 change that never happened.
 
-The API also refuses to start if the published request contract and the fitted artifact
-disagree about category levels, which catches a refit that quietly changed what the service
-should accept.
+The API also checks the published request contract against the fitted artifact at startup, and
+the two directions of a disagreement are treated differently on purpose. A level the model was
+fitted on that the contract does not accept is fatal: the service would answer 422 to an
+application the card was built to score, and nothing in the rejection would say why. A level
+the contract accepts that the fit cannot resolve is not fatal, it is reported on stderr. Every
+such level scores through the catch all bin, which is exactly what the binning already does to
+any level below the 1% population floor, so no response changes.
 
-Measured over the 40,000 request run: mean latency 4.2 ms, p95 4.9 ms, 171.4 requests per
+That asymmetry was a fix, not the original design. The first version demanded exact equality
+in both directions, which meant a rare level absent from a refit's training slice took the
+whole service down at boot. On this data that is not hypothetical: `Maternity leave` and
+`Unknown` rest on two rows each in 215,257, and under a random split the API failed to start
+on 8% of refits. It was refusing to serve over a distinction the card cannot draw, since six
+of the declared levels share the catch all in a normal fit.
+
+Measured over the 40,000 request run: mean latency 2.53 ms, p95 2.65 ms, 285.5 requests per
 second single threaded, 0 rejections. See `reports/end_to_end_summary.json` for the full
 latency distribution and `reports/stream_manifest.json` for the throughput figure.
 
@@ -218,12 +251,21 @@ The bare root path returns 404 on purpose, since no route is defined there.
 `docker compose up --build` stands up the whole thing. What I actually observed running it:
 
 - `trainer` fitted the card inside the container on the full 215,257 rows and exited 0. It
-  reproduced the holdout figures quoted throughout this README, AUC 0.7463 and Gini 0.4927, so
-  the containerised training path is not a different pipeline that happens to run.
+  reproduced the holdout figures the local run produced, so the containerised training path is
+  not a different pipeline that happens to run.
 - `api` came up and passed its healthcheck.
 - A `/score` request with a complete application returned 592.64 in band `approve`, consistent
   with the band cutoffs the trainer itself wrote, decline below 532.25 and refer below 553.34.
 - `dashboard` served HTTP 200.
+
+Those four observations were made against the fit that preceded the removal of `CODE_GENDER`,
+and the figures they reproduced are that model's: AUC 0.7463, Gini 0.4927, cutoffs 532.25 and
+553.34. I have not repeated the run since the refit, because there is no Docker daemon on the
+machine I am writing this from, and restating it with today's numbers as though I had watched
+it happen would be inventing evidence. Nothing in the container path touches the feature list,
+the image installs the same pinned requirements and runs the same `src.train`, and
+`scripts/validate_compose.py` still passes. But what is written above is the earlier model's
+run, and it is labelled as such rather than quietly refreshed.
 
 The structure is a single image serving four roles, chosen by command rather than built four
 times, dependencies installed before source is copied so editing a module does not invalidate
@@ -424,30 +466,30 @@ From `make demo`: 40,000 requests, 0 rejected, 20 windows of 2,000, 4 alerts.
 
 | Window | Regime | Score PSI | Band PSI | Approval rate | Mean PD | Status |
 |---|---|---|---|---|---|---|
-| 1 | stable | 0.0056 | 0.0019 | 68.1% | 0.083 | ok |
-| 2 | stable | 0.0029 | 0.0003 | 69.4% | 0.082 | ok |
-| 3 | stable | 0.0030 | 0.0011 | 69.0% | 0.082 | ok |
-| 4 | stable | 0.0063 | 0.0035 | 69.7% | 0.081 | ok |
-| 5 | stable | 0.0062 | 0.0018 | 70.6% | 0.083 | ok |
-| 6 | stable | 0.0048 | 0.0005 | 70.3% | 0.080 | ok |
-| 7 | stable | 0.0089 | 0.0009 | 69.6% | 0.080 | ok |
-| 8 | stable | 0.0070 | 0.0003 | 69.3% | 0.082 | ok |
-| 9 | ramping | 0.0144 | 0.0084 | 66.0% | 0.087 | ok |
-| 10 | ramping | 0.0894 | 0.0713 | 58.1% | 0.104 | ok |
-| 11 | ramping | 0.3050 | 0.2621 | 47.2% | 0.127 | **breach** |
-| 12 | ramping | 0.5221 | 0.4378 | 39.4% | 0.143 | **breach** |
-| 13 | plateau | 0.6414 | 0.5468 | 37.1% | 0.154 | **ALERT FIRED** |
-| 14 | plateau | 0.5914 | 0.4924 | 38.5% | 0.150 | breach, cooldown |
-| 15 | plateau | 0.5612 | 0.4737 | 39.5% | 0.149 | breach, cooldown |
-| 16 | plateau | 0.6022 | 0.4536 | 39.6% | 0.148 | breach, cooldown |
-| 17 | plateau | 0.5964 | 0.4877 | 38.3% | 0.150 | breach, cooldown |
-| 18 | plateau | 0.5482 | 0.4305 | 40.4% | 0.148 | **ALERT REFIRED** |
-| 19 | plateau | 0.5738 | 0.4548 | 39.3% | 0.148 | breach, cooldown |
-| 20 | plateau | 0.6270 | 0.5224 | 37.3% | 0.151 | breach, cooldown |
+| 1 | stable | 0.0062 | 0.0003 | 69.3% | 0.082 | ok |
+| 2 | stable | 0.0017 | 0.0001 | 69.7% | 0.082 | ok |
+| 3 | stable | 0.0077 | 0.0008 | 69.2% | 0.082 | ok |
+| 4 | stable | 0.0060 | 0.0019 | 69.8% | 0.081 | ok |
+| 5 | stable | 0.0052 | 0.0003 | 70.0% | 0.083 | ok |
+| 6 | stable | 0.0025 | 0.0011 | 70.0% | 0.080 | ok |
+| 7 | stable | 0.0043 | 0.0010 | 69.3% | 0.080 | ok |
+| 8 | stable | 0.0074 | 0.0008 | 68.8% | 0.082 | ok |
+| 9 | ramping | 0.0138 | 0.0070 | 66.3% | 0.086 | ok |
+| 10 | ramping | 0.0977 | 0.0769 | 57.8% | 0.104 | ok |
+| 11 | ramping | 0.3025 | 0.2594 | 47.1% | 0.127 | **breach** |
+| 12 | ramping | 0.5250 | 0.4317 | 39.9% | 0.143 | **breach** |
+| 13 | plateau | 0.6414 | 0.5547 | 36.9% | 0.154 | **ALERT FIRED** |
+| 14 | plateau | 0.5945 | 0.4898 | 38.8% | 0.150 | breach, cooldown |
+| 15 | plateau | 0.5719 | 0.4857 | 39.1% | 0.148 | breach, cooldown |
+| 16 | plateau | 0.6144 | 0.4793 | 38.9% | 0.148 | breach, cooldown |
+| 17 | plateau | 0.6024 | 0.4983 | 38.0% | 0.150 | breach, cooldown |
+| 18 | plateau | 0.5508 | 0.4346 | 40.4% | 0.147 | **ALERT REFIRED** |
+| 19 | plateau | 0.5708 | 0.4554 | 39.4% | 0.148 | breach, cooldown |
+| 20 | plateau | 0.6363 | 0.5464 | 36.8% | 0.151 | breach, cooldown |
 
 This is the full lifecycle in one run:
 
-- **Eight stable windows, zero false positives.** Score PSI between 0.0029 and 0.0089, against
+- **Eight stable windows, zero false positives.** Score PSI between 0.0017 and 0.0077, against
   a warn threshold of 0.10. 16,000 requests through the monitor without a single spurious
   alert.
 - **Detection is gradual, as designed.** The index moves at window 9, is clearly elevated at
@@ -457,8 +499,8 @@ This is the full lifecycle in one run:
 - **The cooldown suppressed four repeats.** Windows 14 through 17 were still in breach and
   still recorded as such. No notification. The alert refired at window 18, exactly five windows
   after the first, and reported an 8 window consecutive run.
-- **Approval rate fell from 70% to 37%** and mean predicted PD nearly doubled from 0.080 to
-  0.154. This is the business consequence the monitoring exists to surface.
+- **Approval rate fell from 69% to 37%** and mean predicted PD nearly doubled from 0.082 to
+  0.151. This is the business consequence the monitoring exists to surface.
 
 The attribution, ranked from the final window:
 
@@ -472,19 +514,21 @@ The attribution, ranked from the final window:
 | EXT_SOURCE_1 | 0.1049 | warn | no, correlated with the other bureau scores |
 | ID_PUBLISH_YEARS | 0.0724 | ok | no |
 | ... | | | |
+| REGION_POPULATION_RELATIVE | 0.0229 | ok | no |
+| GOODS_CREDIT_RATIO | 0.0136 | ok | no |
 | NAME_EDUCATION_TYPE | 0.0134 | ok | no |
-| CODE_GENDER | 0.0072 | ok | no |
 
 The three characteristics I injected the shift into rank first, second and third. The next
 three are the ones genuinely correlated with them, which is correct behaviour rather than
-noise. Characteristics I did not touch stayed flat, `CODE_GENDER` at 0.0072. An analyst
-handed this alert would be pointed at the bureau scores and the age mix immediately.
+noise. Characteristics I did not touch stayed flat, the whole bottom half of the card under
+0.06 while the injected three sit above 0.37. An analyst handed this alert would be pointed at
+the bureau scores and the age mix immediately.
 
 Every alert record carries the metric, window, value, threshold, the consecutive run, the
 specific window ids behind it and the attributed characteristics:
 
 ```
-[2026-08-15T01:13:11.355+00:00] window 13 | psi_score | 0.6414 vs 0.25 | 3 consecutive
+[2026-08-28T07:08:31.754+00:00] window 13 | psi_score | 0.6414 vs 0.25 | 3 consecutive
    breach windows: [11, 12, 13]
    attributed: ['EXT_SOURCE_3', 'EXT_SOURCE_2', 'AGE_YEARS']
 ```
@@ -500,7 +544,7 @@ The simulation warning is the first thing on the page.
 
 ## Tests
 
-124 tests, `make test`, roughly 11 seconds.
+134 tests, `make test`, roughly 11 seconds.
 
 | File | Covers |
 |---|---|
@@ -511,13 +555,15 @@ The simulation warning is the first thing on the page.
 | `test_features.py` | derivations, the sentinel, single record equals batch record |
 | `test_binning.py` | monotonicity, missing bins, unseen categories, bins agree with weights |
 | `test_store.py` | round trips, window claiming, schema migration |
+| `test_contract.py` | the startup contract check, in both directions |
 | `test_dashboard.py` | the dashboard script runs, empty and populated |
 
-Three of these tests exist because they caught something during the build rather than after:
-the schema migration test reproduces an actual failure where adding a column to the alerts
-table did nothing to an existing database, and the dashboard tests caught an invalid emoji
-argument that would have crashed the page on load and a cache key that returned the wrong
-store's data.
+Four of these exist because they caught something rather than confirmed something: the
+schema migration test reproduces an actual failure where adding a column to the alerts table
+did nothing to an existing database, the dashboard tests caught an invalid emoji argument that
+would have crashed the page on load and a cache key that returned the wrong store's data, and
+`test_contract.py` pins the asymmetry described under The scoring API, after the original
+symmetric check turned a rare training level into a boot failure.
 
 ## Repository layout
 
@@ -554,8 +600,9 @@ What this demonstrates: a model served behind a real API with validation strict 
 useful, a monitoring system that runs on a schedule against a frozen training baseline and
 keeps working, and an alerting design where the interesting decisions are about restraint.
 The window size is justified by measurement rather than convention. The attribution points at
-the right characteristics. I found and fixed three real defects during the build and wrote
-tests for each.
+the right characteristics. I found and fixed four real defects during the build and wrote
+tests for each, the last of them a startup check that was strict in the wrong direction and
+would have taken the service down over a category level the card cannot even represent.
 
 Where it is weak, and I would rather say this than have it drawn out of me:
 
@@ -575,10 +622,16 @@ Where it is weak, and I would rather say this than have it drawn out of me:
 - **Nothing here monitors whether the model is still right.** Stability indices watch inputs
   and outputs. A card can be perfectly stable and quietly stop ranking risk. Catching that
   needs back testing against realised defaults, which this extract cannot support.
-- **SQLite and a single threaded API are demonstration scale.** 171 requests per second is
+- **SQLite and a single threaded API are demonstration scale.** 286 requests per second is
   fine for this and nowhere near a real origination platform.
 - **One model, no challenger.** A mature monitoring setup benchmarks the champion against
   something.
+- **Excluding gender is not the same as demonstrating fairness.** `CODE_GENDER` is out of the
+  card and out of the request contract, which is the necessary step. It is not the sufficient
+  one. Gender stays recoverable from the characteristics that remain, and nothing here measures
+  disparate impact, because that needs outcome data by protected class and this extract has
+  none. Nor does the monitoring layer watch for it: a stability index says a distribution
+  moved, never that a decision was unfair.
 
 ## License
 

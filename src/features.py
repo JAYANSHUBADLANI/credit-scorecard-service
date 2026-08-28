@@ -37,8 +37,12 @@ RAW_NUMERIC_INPUTS: List[str] = [
     "REGION_POPULATION_RELATIVE",
 ]
 
+# CODE_GENDER is not here on purpose. Gender is a prohibited basis for a credit decision
+# under ECOA and Regulation B, so it is excluded at the input boundary rather than merely
+# left out of the model: a field the service never accepts cannot be reintroduced by a
+# later refit that widens the feature list. See README, "Characteristics deliberately
+# excluded".
 RAW_CATEGORICAL_INPUTS: List[str] = [
-    "CODE_GENDER",
     "NAME_EDUCATION_TYPE",
     "NAME_INCOME_TYPE",
     "NAME_FAMILY_STATUS",

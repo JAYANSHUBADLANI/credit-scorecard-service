@@ -33,7 +33,6 @@ def base_row() -> dict:
         "AMT_ANNUITY": 20000.0,
         "AMT_GOODS_PRICE": 360000.0,
         "REGION_POPULATION_RELATIVE": 0.02,
-        "CODE_GENDER": "F",
         "NAME_EDUCATION_TYPE": "Higher education",
         "NAME_INCOME_TYPE": "Working",
         "NAME_FAMILY_STATUS": "Married",
@@ -93,8 +92,19 @@ def test_zero_denominator_gives_missing_rather_than_infinity():
 
 def test_categoricals_pass_through_unchanged():
     features = build_one()
-    assert features["CODE_GENDER"] == "F"
     assert features["NAME_EDUCATION_TYPE"] == "Higher education"
+    assert features["NAME_INCOME_TYPE"] == "Working"
+
+
+def test_gender_is_not_a_raw_input_at_all():
+    """Excluded at the boundary, not merely left out of the model.
+
+    A prohibited basis that the service still ingests is one refit away from being scored on.
+    Keeping it out of RAW_INPUTS means the feature builder would have to be edited too.
+    """
+    assert "CODE_GENDER" not in RAW_INPUTS
+    features = build_features(pd.DataFrame([{**base_row(), "CODE_GENDER": "F"}]))
+    assert "CODE_GENDER" not in features.columns
 
 
 def test_missing_raw_column_raises_rather_than_producing_a_silent_null():
@@ -116,7 +126,7 @@ def test_single_record_matches_the_same_record_inside_a_batch():
         base_row(),
         {**base_row(), "EXT_SOURCE_1": None, "AMT_INCOME_TOTAL": 250000.0},
         {**base_row(), "DAYS_EMPLOYED": float(DAYS_EMPLOYED_SENTINEL)},
-        {**base_row(), "AMT_GOODS_PRICE": None, "CODE_GENDER": "M"},
+        {**base_row(), "AMT_GOODS_PRICE": None, "NAME_FAMILY_STATUS": "Single / not married"},
     ]
     batch = build_features(pd.DataFrame(rows))
 

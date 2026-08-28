@@ -33,7 +33,9 @@ def test_model_metadata_describes_what_is_deployed(api_client):
     assert body["model_features"]
     assert body["band_cutoffs"]["decline_below"] < body["band_cutoffs"]["refer_below"]
     assert body["scaling"]["pdo"] == 20.0
-    assert "CODE_GENDER" in body["accepted_categorical_levels"]
+    assert "NAME_EDUCATION_TYPE" in body["accepted_categorical_levels"]
+    assert "CODE_GENDER" not in body["accepted_categorical_levels"]
+    assert "CODE_GENDER" not in body["model_features"]
 
 
 # Scoring ----------------------------------------------------------------------------
@@ -122,7 +124,8 @@ def test_bands_follow_the_published_cutoffs(api_client, valid_payload):
         ("AMT_CREDIT", 0.0, "AMT_CREDIT"),
         ("REGION_POPULATION_RELATIVE", 2.0, "REGION_POPULATION_RELATIVE"),
         ("NAME_EDUCATION_TYPE", "PhD", "NAME_EDUCATION_TYPE"),
-        ("CODE_GENDER", "female", "CODE_GENDER"),          # case matters, it is a fitted level
+        # Case matters on a categorical, it is a fitted level rather than free text.
+        ("NAME_FAMILY_STATUS", "married", "NAME_FAMILY_STATUS"),
         ("NAME_CONTRACT_TYPE", "Mortgage", "NAME_CONTRACT_TYPE"),
     ],
 )
@@ -143,6 +146,18 @@ def test_unknown_field_is_rejected_rather_than_ignored(api_client, valid_payload
     response = api_client.post("/score", json={**valid_payload, "EXT_SOURCE_TWO": 0.4})
     assert response.status_code == 422
     assert "EXT_SOURCE_TWO" in {d["field"] for d in response.json()["detail"]}
+
+
+def test_gender_is_refused_rather_than_ignored(api_client, valid_payload):
+    """Gender is a prohibited basis, so the service does not merely decline to model it.
+
+    Accepting the field and dropping it would be worse than refusing: the caller would have
+    no way to tell that the characteristic they sent played no part, and the field would sit
+    in the request contract waiting for a later refit to pick it up.
+    """
+    response = api_client.post("/score", json={**valid_payload, "CODE_GENDER": "F"})
+    assert response.status_code == 422
+    assert "CODE_GENDER" in {d["field"] for d in response.json()["detail"]}
 
 
 def test_missing_required_field_is_rejected(api_client, valid_payload):

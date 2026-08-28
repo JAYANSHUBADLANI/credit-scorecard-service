@@ -74,7 +74,6 @@ def valid_payload() -> dict:
         "AMT_ANNUITY": 27000.0,
         "AMT_GOODS_PRICE": 540000.0,
         "REGION_POPULATION_RELATIVE": 0.018,
-        "CODE_GENDER": "F",
         "NAME_EDUCATION_TYPE": "Higher education",
         "NAME_INCOME_TYPE": "Working",
         "NAME_FAMILY_STATUS": "Married",

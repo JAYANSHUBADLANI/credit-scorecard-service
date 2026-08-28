@@ -30,7 +30,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .features import DAYS_EMPLOYED_SENTINEL
 
-GenderLiteral = Literal["F", "M", "XNA"]
+# There is no gender field. It is not merely unused by the model: the request contract does
+# not accept it, so a caller cannot send it and a later refit cannot quietly pick it up. See
+# README, "Characteristics deliberately excluded".
 EducationLiteral = Literal[
     "Academic degree",
     "Higher education",
@@ -61,7 +63,6 @@ ContractTypeLiteral = Literal["Cash loans", "Revolving loans"]
 # Checked against the fitted artifact at startup so the published contract and the model
 # cannot drift apart across a refit. See `api.verify_contract`.
 CATEGORICAL_LEVELS: Dict[str, List[str]] = {
-    "CODE_GENDER": list(GenderLiteral.__args__),
     "NAME_EDUCATION_TYPE": list(EducationLiteral.__args__),
     "NAME_INCOME_TYPE": list(IncomeTypeLiteral.__args__),
     "NAME_FAMILY_STATUS": list(FamilyStatusLiteral.__args__),
@@ -108,7 +109,6 @@ class ScoreRequest(BaseModel):
     AMT_GOODS_PRICE: Optional[float] = Field(default=None, gt=0.0, le=1e8)
     REGION_POPULATION_RELATIVE: float = Field(ge=0.0, le=1.0)
 
-    CODE_GENDER: GenderLiteral
     NAME_EDUCATION_TYPE: EducationLiteral
     NAME_INCOME_TYPE: IncomeTypeLiteral
     NAME_FAMILY_STATUS: FamilyStatusLiteral
