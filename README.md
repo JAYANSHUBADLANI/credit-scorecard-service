@@ -114,8 +114,9 @@ The containerised path, which stands up all five services in dependency order:
 docker compose up --build
 ```
 
-The API is also deployed and live on Google Cloud Run, see "Containerisation and cloud
-deployment" below:
+The API has been deployed to Google Cloud Run at the URL below. It is currently returning 503
+and the deployed image predates the removal of `CODE_GENDER`, so treat it as a record of the
+deployment rather than a working demo. See "Containerisation and cloud deployment" below:
 
 **https://credit-scorecard-api-403429711696.us-central1.run.app/docs**
 
@@ -248,24 +249,29 @@ The bare root path returns 404 on purpose, since no route is defined there.
 
 ### What runs locally
 
-`docker compose up --build` stands up the whole thing. What I actually observed running it:
+`docker compose up --build` stands up the whole thing. What I actually observed running it, on
+Docker 29.7.2 against an arm64 host:
 
-- `trainer` fitted the card inside the container on the full 215,257 rows and exited 0. It
-  reproduced the holdout figures the local run produced, so the containerised training path is
-  not a different pipeline that happens to run.
-- `api` came up and passed its healthcheck.
-- A `/score` request with a complete application returned 592.64 in band `approve`, consistent
-  with the band cutoffs the trainer itself wrote, decline below 532.25 and refer below 553.34.
+- `trainer` fitted the card inside the container on the full 215,257 rows and exited 0,
+  reproducing the host's figures exactly: 14 characteristics, holdout AUC 0.7449, Gini 0.4899,
+  KS 0.3674, cutoffs 532.45 and 553.26. The `reports/model_performance.json` the container
+  wrote differed from the host's in its `trained_at` timestamp and in nothing else, so the
+  containerised training path is not a different pipeline that happens to run.
+- `api` reached `healthy` and reported 14 characteristics.
+- A `/score` request with a complete application returned 591.09 in band `approve`, the same
+  score to the cent the host returns for that application.
+- The same request with `CODE_GENDER` added came back 422, so the exclusion holds through the
+  served path rather than only in the tests.
+- `monitor` and `dashboard` reached `healthy` as well, which is the point of giving each role
+  its own healthcheck. Both used to inherit the image's probe against the API port, which
+  neither of them serves, and so reported unhealthy for their whole lives while working
+  perfectly. The monitor's own probe reported a wake up nine seconds old across 26 recorded
+  runs, which is the check doing its job rather than a stub returning zero.
 - `dashboard` served HTTP 200.
 
-Those four observations were made against the fit that preceded the removal of `CODE_GENDER`,
-and the figures they reproduced are that model's: AUC 0.7463, Gini 0.4927, cutoffs 532.25 and
-553.34. I have not repeated the run since the refit, because there is no Docker daemon on the
-machine I am writing this from, and restating it with today's numbers as though I had watched
-it happen would be inventing evidence. Nothing in the container path touches the feature list,
-the image installs the same pinned requirements and runs the same `src.train`, and
-`scripts/validate_compose.py` still passes. But what is written above is the earlier model's
-run, and it is labelled as such rather than quietly refreshed.
+That was an arm64 build, this laptop's native architecture. Whether the pinned wheels resolve on
+linux/amd64 is a separate question, and it is answered separately below, because Cloud Run
+required an explicit `--platform=linux/amd64` rebuild before it would accept the image.
 
 The structure is a single image serving four roles, chosen by command rather than built four
 times, dependencies installed before source is copied so editing a module does not invalidate
@@ -349,6 +355,15 @@ service. The monitor is not, because it is a long running loop, and a perpetual 
 Run means paying for an always on minimum instance. The honest shape for it is a Cloud Run Job
 on a Cloud Scheduler trigger rather than a loop that never ends, which is a rewrite of how the
 monitor is invoked rather than a deployment command. I have not done that yet.
+
+Two further things are true of the deployed copy as of this writing, and both matter more than
+the fact that it exists. It was built and pushed before `CODE_GENDER` was removed, so the image
+on Cloud Run still serves the earlier fifteen characteristic card with gender among them, and
+disagrees with this repository until it is rebuilt and redeployed. And the service is currently
+answering 503 rather than serving at all: six requests over a minute every one of them failed,
+which is longer than a cold start. I have not diagnosed it. I am not going to keep describing a
+service as live while it returns 503, so the link below is left in place and labelled instead of
+quietly removed.
 
 ### Known limitations of this deployment
 

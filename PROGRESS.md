@@ -36,10 +36,11 @@ point. Every number quoted in the README comes from a real run.
   everything the commands need, dependencies are pinned, and the raw CSV is excluded from build
   context. It passes.
 - **Built and run.** `docker compose up trainer` fitted the card inside the container on all
-  215,257 rows and exited 0, reproducing the holdout figures of the fit current at the time,
-  AUC 0.7463 and Gini 0.4927, before `CODE_GENDER` was removed. `api` came up
-  healthy and returned 592.64 in band `approve` for a complete application. `dashboard` served
-  HTTP 200.
+  215,257 rows and exited 0, reproducing the host's figures exactly, AUC 0.7449 and Gini
+  0.4899. `api` reached healthy and returned 591.09 in band `approve` for a complete
+  application, and 422 for the same application with `CODE_GENDER` added. `monitor` and
+  `dashboard` reached healthy too, which they did not before each role was given its own
+  healthcheck. `dashboard` served HTTP 200. Rerun on Docker 29.7.2, arm64.
 
 ### Phase 3, the stream, the monitoring layer and alerting: done
 
