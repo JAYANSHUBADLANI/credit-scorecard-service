@@ -244,6 +244,10 @@ def fit_numeric(values, target: np.ndarray, name: str, config: BinningConfig) ->
     counts = list(np.bincount(index, minlength=n_bins).astype(int))
     bads = list(np.bincount(index, weights=observed_target, minlength=n_bins).astype(int))
 
+    # A share of the whole population, missing rows included, not of the observed rows. On a
+    # characteristic that is half missing this makes the floor twice as strict in observed
+    # terms, which is intended: a bin holding 3% of applicants is the reviewable unit, and
+    # whether the other applicants had a value is a separate question the missing bin answers.
     min_count = max(int(config.min_bin_fraction * len(values)), 1)
     counts, bads, edges = _enforce_minimums(counts, bads, edges, min_count, config.min_bin_bads)
     if config.enforce_monotonic:

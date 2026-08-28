@@ -58,7 +58,7 @@ def load_reference(reference_path: str):
         return json.load(handle)
 
 
-def threshold_band(figure, warn: float, alert: float, x_range) -> None:
+def threshold_band(figure, warn: float, alert: float) -> None:
     figure.add_hline(
         y=warn, line_dash="dot", line_color=STATUS_COLOURS["warn"],
         annotation_text=f"warn {warn:.2f}", annotation_position="top left",
@@ -142,7 +142,7 @@ def main() -> None:
                 hovertemplate="window %{x}<br>index %{y:.4f}<extra></extra>",
             )
         )
-    threshold_band(figure, config.monitoring.psi_warn, config.monitoring.psi_alert, None)
+    threshold_band(figure, config.monitoring.psi_warn, config.monitoring.psi_alert)
 
     for _, alert in alerts.iterrows():
         figure.add_vline(
@@ -162,45 +162,62 @@ def main() -> None:
         "which is the difference between an alert someone can act on and one they ignore."
     )
 
+    # Population metrics exist for every window, characteristic ones do not: a window whose
+    # scoring log predates the current feature names contributes no bin indices, and the
+    # monitor records the population indices anyway. The page has to survive that rather than
+    # taking the whole dashboard down with it, which is what indexing straight into an empty
+    # pivot used to do.
     csi = metrics[metrics["metric"] == "csi"]
-    pivot = csi.pivot_table(index="window_id", columns="feature", values="value")
-    ranked = pivot.iloc[-1].sort_values(ascending=False)
+    pivot = (
+        csi.pivot_table(index="window_id", columns="feature", values="value")
+        if not csi.empty
+        else pd.DataFrame()
+    )
 
-    left, right = st.columns([2, 1])
-    with left:
-        default = list(ranked.head(5).index)
-        chosen = st.multiselect(
-            "Characteristics", options=list(pivot.columns), default=default,
+    if pivot.empty:
+        st.info(
+            "No characteristic level indices recorded yet. The population indices above are "
+            "computed from the score and the band, which every scored request carries, while "
+            "these need the per characteristic bin indices the API writes alongside them."
         )
-        csi_figure = go.Figure()
-        for feature in chosen:
-            csi_figure.add_trace(
-                go.Scatter(
-                    x=pivot.index, y=pivot[feature], mode="lines+markers", name=feature,
-                    hovertemplate=f"{feature}<br>window %{{x}}<br>CSI %{{y:.4f}}<extra></extra>",
-                )
+    else:
+        ranked = pivot.iloc[-1].dropna().sort_values(ascending=False)
+
+        left, right = st.columns([2, 1])
+        with left:
+            default = list(ranked.head(5).index)
+            chosen = st.multiselect(
+                "Characteristics", options=list(pivot.columns), default=default,
             )
-        threshold_band(csi_figure, config.monitoring.csi_warn, config.monitoring.csi_alert, None)
-        csi_figure.update_layout(
-            xaxis_title="Monitoring window", yaxis_title="Characteristic stability index",
-            height=380, hovermode="x unified", margin=dict(t=30, b=40),
-        )
-        st.plotly_chart(csi_figure, use_container_width=True)
+            csi_figure = go.Figure()
+            for feature in chosen:
+                csi_figure.add_trace(
+                    go.Scatter(
+                        x=pivot.index, y=pivot[feature], mode="lines+markers", name=feature,
+                        hovertemplate=f"{feature}<br>window %{{x}}<br>CSI %{{y:.4f}}<extra></extra>",
+                    )
+                )
+            threshold_band(csi_figure, config.monitoring.csi_warn, config.monitoring.csi_alert)
+            csi_figure.update_layout(
+                xaxis_title="Monitoring window", yaxis_title="Characteristic stability index",
+                height=380, hovermode="x unified", margin=dict(t=30, b=40),
+            )
+            st.plotly_chart(csi_figure, use_container_width=True)
 
-    with right:
-        st.markdown(f"**Ranked by the latest window ({latest_window})**")
-        table = ranked.reset_index()
-        table.columns = ["characteristic", "csi"]
-        table["status"] = table["csi"].apply(
-            lambda v: "alert" if v >= config.monitoring.csi_alert
-            else ("warn" if v >= config.monitoring.csi_warn else "ok")
-        )
-        st.dataframe(
-            table.style.format({"csi": "{:.4f}"}).map(
-                lambda v: f"color: {STATUS_COLOURS.get(v, '')}", subset=["status"]
-            ),
-            hide_index=True, use_container_width=True, height=340,
-        )
+        with right:
+            st.markdown(f"**Ranked by the latest window ({latest_window})**")
+            table = ranked.reset_index()
+            table.columns = ["characteristic", "csi"]
+            table["status"] = table["csi"].apply(
+                lambda v: "alert" if v >= config.monitoring.csi_alert
+                else ("warn" if v >= config.monitoring.csi_warn else "ok")
+            )
+            st.dataframe(
+                table.style.format({"csi": "{:.4f}"}).map(
+                    lambda v: f"color: {STATUS_COLOURS.get(v, '')}", subset=["status"]
+                ),
+                hide_index=True, use_container_width=True, height=340,
+            )
 
     # What the service is deciding --------------------------------------------------------
     st.subheader("What the service is deciding")

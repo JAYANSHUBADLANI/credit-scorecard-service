@@ -2,10 +2,11 @@ PYTHON ?= python3
 API_HOST ?= 127.0.0.1
 API_PORT ?= 8000
 
-.PHONY: help install train demo api monitor monitor-once stream dashboard test noise compose-check clean clean-data
+.PHONY: help install install-dev train demo api monitor monitor-once stream dashboard test noise compose-check clean clean-data
 
 help:
-	@echo "make install       install the pinned dependencies"
+	@echo "make install       install the pinned runtime dependencies"
+	@echo "make install-dev   also install the test tooling, needed for make test"
 	@echo "make demo          the whole system end to end, locally: train, serve, stream, monitor, report"
 	@echo "make train         fit the scorecard and write the artifact and the reference distributions"
 	@echo "make api           run the scoring API on $(API_HOST):$(API_PORT)"
@@ -21,6 +22,9 @@ help:
 
 install:
 	$(PYTHON) -m pip install -r requirements.txt
+
+install-dev:
+	$(PYTHON) -m pip install -r requirements-dev.txt
 
 # The single documented entrypoint. Everything the README quotes comes from this target.
 demo:

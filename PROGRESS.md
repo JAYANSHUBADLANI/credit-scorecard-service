@@ -56,7 +56,7 @@ point. Every number quoted in the README comes from a real run.
 - Streamlit dashboard: stability trends against thresholds, characteristic attribution,
   approval rate and mean predicted PD against their training baselines, the alert table with
   its audit trail, and the monitor run history.
-- 134 tests covering the transformation, the binning, the endpoint, the drift computation, the
+- 141 tests covering the transformation, the binning, the endpoint, the drift computation, the
   window mechanics, the debounce, the store and the dashboard.
 - Single entrypoint: `make demo`.
 - Business write up in `docs/business_case.md`.

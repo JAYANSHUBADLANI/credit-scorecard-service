@@ -14,7 +14,6 @@ that.
 
 from __future__ import annotations
 
-import json
 import re
 import sys
 from pathlib import Path
@@ -60,7 +59,11 @@ def check_compose(problems: List[str]) -> dict:
                     problems.append(f"{name}: unknown depends_on condition '{condition}'")
 
         for mapping in service.get("ports", []):
-            host = str(mapping).split(":")[0]
+            # A mapping is "container", "host:container" or "ip:host:container". Taking the
+            # first field treats the bind address as the port in the three part form and the
+            # container port as the host port in the one part form, so read from the right.
+            parts = str(mapping).split(":")
+            host = parts[-2] if len(parts) >= 2 else parts[-1]
             if host in published_ports:
                 problems.append(
                     f"{name}: publishes host port {host}, already used by {published_ports[host]}"
@@ -72,15 +75,33 @@ def check_compose(problems: List[str]) -> dict:
             if host.startswith("./") and not (PROJECT_ROOT / host[2:]).exists():
                 problems.append(f"{name}: bind mount source '{host}' does not exist")
 
+        # Length is checked before indexing. A checker that raises IndexError on a malformed
+        # compose file reports a traceback instead of the problem it exists to name.
         command = service.get("command")
-        if isinstance(command, list) and command[:2] == ["python", "-m"]:
-            module = PROJECT_ROOT / (command[2].replace(".", "/") + ".py")
-            if not module.exists():
-                problems.append(f"{name}: command runs {command[2]}, which does not exist")
-        if isinstance(command, list) and command and command[0] == "streamlit":
-            script = PROJECT_ROOT / command[2]
-            if not script.exists():
-                problems.append(f"{name}: streamlit script '{command[2]}' does not exist")
+        if isinstance(command, list) and len(command) >= 3:
+            if command[:2] == ["python", "-m"]:
+                module = PROJECT_ROOT / (command[2].replace(".", "/") + ".py")
+                if not module.exists():
+                    problems.append(f"{name}: command runs {command[2]}, which does not exist")
+            elif command[0] == "streamlit":
+                script = PROJECT_ROOT / command[2]
+                if not script.exists():
+                    problems.append(f"{name}: streamlit script '{command[2]}' does not exist")
+        elif isinstance(command, list) and command:
+            problems.append(f"{name}: command {command} is too short to name a target")
+
+    # The image declares a healthcheck against the API port, and every service inherits it.
+    # A role that does not serve that port then reports unhealthy for its whole life unless it
+    # says otherwise, which is how the monitor and the dashboard sat permanently red in
+    # `docker compose ps` while working perfectly. Silence is the bug, so silence is what is
+    # checked: state a healthcheck or disable it, but do not inherit one by accident.
+    for name, service in services.items():
+        if "healthcheck" not in service:
+            problems.append(
+                f"{name}: declares no healthcheck and no `healthcheck: disable: true`, so it "
+                "inherits the image's API port check. Any role that does not serve that port "
+                "will report unhealthy forever"
+            )
 
     # A service that depends on another being healthy needs that service to define a check.
     for name, service in services.items():
@@ -89,10 +110,16 @@ def check_compose(problems: List[str]) -> dict:
             continue
         for target, rule in depends.items():
             if (rule or {}).get("condition") == "service_healthy":
-                if target in services and "healthcheck" not in services[target]:
+                check = services.get(target, {}).get("healthcheck")
+                if target in services and not check:
                     problems.append(
                         f"{name}: waits for '{target}' to be healthy, but '{target}' declares "
                         "no healthcheck, so compose will never consider it healthy"
+                    )
+                elif isinstance(check, dict) and check.get("disable"):
+                    problems.append(
+                        f"{name}: waits for '{target}' to be healthy, but '{target}' disables "
+                        "its healthcheck, so that condition can never be met"
                     )
     return spec
 

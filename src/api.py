@@ -55,6 +55,22 @@ class ServiceState:
 state = ServiceState()
 
 
+def loaded() -> tuple[ScoringService, Store]:
+    """The objects startup built, or a clear error rather than a confusing one.
+
+    These call sites used `assert`. Assertions are stripped under `python -O`, so on an
+    optimised interpreter a startup that had not completed would not have produced this
+    message at all, it would have produced `'NoneType' object has no attribute` from
+    somewhere further down the call stack. A guard on request state belongs in an `if`.
+    """
+    if state.scoring is None or state.store is None:
+        raise RuntimeError(
+            "service state is not loaded, so startup did not complete. Check the logs for "
+            "the artifact path and the contract check."
+        )
+    return state.scoring, state.store
+
+
 def verify_contract(scoring: ScoringService) -> None:
     """Check the published request contract against the fitted artifact at startup.
 
@@ -149,28 +165,28 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    assert state.scoring is not None and state.store is not None
+    scoring, store = loaded()
     return HealthResponse(
         status="ok",
-        model_version=state.scoring.model_version,
-        trained_at=state.scoring.artifact.trained_at,
-        features=len(state.scoring.model_features),
-        requests_scored=state.store.count_scores(),
+        model_version=scoring.model_version,
+        trained_at=scoring.artifact.trained_at,
+        features=len(scoring.model_features),
+        requests_scored=store.count_scores(),
     )
 
 
 @app.get("/model")
 def model_metadata() -> Dict[str, Any]:
     """What is actually deployed, which is the first question in any model review."""
-    assert state.scoring is not None
-    artifact = state.scoring.artifact
+    scoring, _ = loaded()
+    artifact = scoring.artifact
     return {
         "model_version": artifact.model_version,
         "trained_at": artifact.trained_at,
         "training_rows": artifact.training_rows,
         "training_bad_rate": round(artifact.training_bad_rate, 5),
-        "model_features": state.scoring.model_features,
-        "monitored_features": state.scoring.monitored_features,
+        "model_features": scoring.model_features,
+        "monitored_features": scoring.monitored_features,
         "band_cutoffs": {
             "decline_below": round(artifact.bands.decline_below, 2),
             "refer_below": round(artifact.bands.refer_below, 2),
@@ -190,13 +206,13 @@ def model_metadata() -> Dict[str, Any]:
     responses={422: {"model": ErrorResponse, "description": "The request failed validation"}},
 )
 def score(request: ScoreRequest) -> ScoreResponse:
-    assert state.scoring is not None and state.store is not None
+    scoring, store = loaded()
 
     started = time.perf_counter()
-    result = state.scoring.score_payload(request.model_dump())
+    result = scoring.score_payload(request.model_dump())
     latency_ms = (time.perf_counter() - started) * 1000.0
 
-    state.store.log_score(
+    store.log_score(
         request_id=result.request_id,
         model_version=result.model_version,
         source="api",
