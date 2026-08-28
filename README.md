@@ -114,9 +114,11 @@ The containerised path, which stands up all five services in dependency order:
 docker compose up --build
 ```
 
-The API has been deployed to Google Cloud Run at the URL below. It is currently returning 503
-and the deployed image predates the removal of `CODE_GENDER`, so treat it as a record of the
-deployment rather than a working demo. See "Containerisation and cloud deployment" below:
+The API has been deployed to Google Cloud Run at the URL below. It is not answering at present,
+because billing is disabled on the project rather than because anything is wrong with the
+service, and the deployed image predates the removal of `CODE_GENDER`. Treat it as a record of
+the deployment rather than a working demo, and see "Containerisation and cloud deployment"
+below for both details:
 
 **https://credit-scorecard-api-403429711696.us-central1.run.app/docs**
 
@@ -357,13 +359,20 @@ on a Cloud Scheduler trigger rather than a loop that never ends, which is a rewr
 monitor is invoked rather than a deployment command. I have not done that yet.
 
 Two further things are true of the deployed copy as of this writing, and both matter more than
-the fact that it exists. It was built and pushed before `CODE_GENDER` was removed, so the image
-on Cloud Run still serves the earlier fifteen characteristic card with gender among them, and
-disagrees with this repository until it is rebuilt and redeployed. And the service is currently
-answering 503 rather than serving at all: six requests over a minute every one of them failed,
-which is longer than a cold start. I have not diagnosed it. I am not going to keep describing a
-service as live while it returns 503, so the link below is left in place and labelled instead of
-quietly removed.
+the fact that it exists.
+
+It was built and pushed before `CODE_GENDER` was removed, so the image on Cloud Run still holds
+the earlier fifteen characteristic card with gender among them. It disagrees with this
+repository until it is rebuilt with `--platform=linux/amd64` and redeployed.
+
+And it is not serving. Every request returns 503, and the revision's own logs give the reason:
+`The request failed because billing is disabled for this project.` The service itself is fine,
+`gcloud run services describe` reports Ready, ConfigurationsReady and RoutesReady all true, and
+the container answers in 400ms rather than timing out. Nothing is wrong with the image or the
+deployment. The project simply has no billing account attached any more, which is a billing
+console question rather than an engineering one, and re-enabling it is not something I am going
+to do on the strength of a README. Worth knowing that a Cloud Run URL returning 503 is not
+evidence about the code behind it.
 
 ### Known limitations of this deployment
 
