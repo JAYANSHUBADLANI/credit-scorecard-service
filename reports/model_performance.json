@@ -1,6 +1,6 @@
 {
   "model_version": "1.0.0",
-  "trained_at": "2026-08-28T07:05:14+00:00",
+  "trained_at": "2026-08-28T12:45:03+00:00",
   "training_rows": 215257,
   "holdout_rows": 92254,
   "training_bad_rate": 0.08126,
@@ -10,7 +10,6 @@
     "EXT_SOURCE_2",
     "EXT_SOURCE_1",
     "EMPLOYED_YEARS",
-    "AGE_YEARS",
     "GOODS_CREDIT_RATIO",
     "NAME_INCOME_TYPE",
     "NAME_EDUCATION_TYPE",
@@ -18,17 +17,16 @@
     "ID_PUBLISH_YEARS",
     "CREDIT_TERM",
     "AMT_CREDIT",
-    "REGION_POPULATION_RELATIVE",
-    "NAME_FAMILY_STATUS"
+    "REGION_POPULATION_RELATIVE"
   ],
-  "train_auc": 0.7387,
-  "holdout_auc": 0.7449,
-  "train_gini": 0.4774,
-  "holdout_gini": 0.4899,
-  "train_ks": 0.3545,
-  "holdout_ks": 0.3674,
+  "train_auc": 0.7385,
+  "holdout_auc": 0.7446,
+  "train_gini": 0.477,
+  "holdout_gini": 0.4892,
+  "train_ks": 0.3547,
+  "holdout_ks": 0.3662,
   "band_cutoffs": {
-    "decline_below": 532.45,
-    "refer_below": 553.26
+    "decline_below": 532.42,
+    "refer_below": 553.2
   }
 }

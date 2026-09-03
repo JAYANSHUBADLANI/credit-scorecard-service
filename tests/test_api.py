@@ -125,7 +125,9 @@ def test_bands_follow_the_published_cutoffs(api_client, valid_payload):
         ("REGION_POPULATION_RELATIVE", 2.0, "REGION_POPULATION_RELATIVE"),
         ("NAME_EDUCATION_TYPE", "PhD", "NAME_EDUCATION_TYPE"),
         # Case matters on a categorical, it is a fitted level rather than free text.
-        ("NAME_FAMILY_STATUS", "married", "NAME_FAMILY_STATUS"),
+        ("NAME_EDUCATION_TYPE", "higher education", "NAME_EDUCATION_TYPE"),
+        # Marital status is a prohibited basis and the contract refuses the field itself.
+        ("NAME_FAMILY_STATUS", "Married", "NAME_FAMILY_STATUS"),
         ("NAME_CONTRACT_TYPE", "Mortgage", "NAME_CONTRACT_TYPE"),
     ],
 )
@@ -220,3 +222,36 @@ def test_log_records_the_bin_each_characteristic_fell_into(api_client, valid_pay
     assert len(bins) >= 15
     assert all(isinstance(index, int) for index in bins.values())
     assert "EXT_SOURCE_2" in bins
+
+
+# Adverse action reason codes ---------------------------------------------------------
+
+def test_a_decline_carries_its_principal_reasons(api_client, valid_payload):
+    """Regulation B attaches the disclosure to the decline, so the endpoint has to carry it."""
+    declined = dict(
+        valid_payload,
+        EXT_SOURCE_1=None,
+        EXT_SOURCE_2=0.05,
+        EXT_SOURCE_3=0.05,
+        NAME_EDUCATION_TYPE="Lower secondary",
+        DAYS_EMPLOYED=-200.0,
+    )
+    body = api_client.post("/score", json=declined).json()
+
+    assert body["band"] == "decline"
+    reasons = body["reason_codes"]
+    assert reasons
+    assert [r["rank"] for r in reasons] == list(range(1, len(reasons) + 1))
+    # The arithmetic is published with the statement so the applicant can check it.
+    for reason in reasons:
+        assert reason["code"] and reason["statement"]
+        assert reason["shortfall"] == pytest.approx(
+            reason["reference_points"] - reason["points"], abs=0.01
+        )
+
+
+def test_an_approval_carries_no_reasons(api_client, valid_payload):
+    """A reason code on an approval is a reason for a decision that was never taken."""
+    body = api_client.post("/score", json=valid_payload).json()
+    assert body["band"] == "approve"
+    assert body["reason_codes"] == []

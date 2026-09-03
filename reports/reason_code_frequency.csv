@@ -1,0 +1,13 @@
+feature,code,statement,prohibited_basis,cited_any_rank,cited_share,cited_first,first_share
+EXT_SOURCE_3,AA03,External credit bureau score (source 3) below the level required,,8421,0.9346,4306,0.4779
+EXT_SOURCE_2,AA02,External credit bureau score (source 2) below the level required,,7338,0.8144,3675,0.4079
+EMPLOYED_YEARS,AA05,Length of employment too short,,5527,0.6134,0,0.0
+GOODS_CREDIT_RATIO,AA06,Amount financed is high relative to the value of the goods purchased,,4979,0.5526,392,0.0435
+CREDIT_TERM,AA07,Instalment is high relative to the amount of credit requested,,4294,0.4766,0,0.0
+EXT_SOURCE_1,AA01,External credit bureau score (source 1) below the level required,,2933,0.3255,631,0.07
+NAME_EDUCATION_TYPE,AA04,Level of education recorded on the application,,2228,0.2473,6,0.0007
+AMT_CREDIT,AA08,Amount of credit requested,,229,0.0254,0,0.0
+ID_PUBLISH_YEARS,AA09,Identity document has been on file for too short a time,,35,0.0039,0,0.0
+NAME_INCOME_TYPE,AA12,Type of income recorded on the application,,28,0.0031,0,0.0
+REGION_POPULATION_RELATIVE,AA11,Population density of the region of residence,,26,0.0029,0,0.0
+PHONE_CHANGE_YEARS,AA10,Telephone number on file was changed recently,,2,0.0002,0,0.0

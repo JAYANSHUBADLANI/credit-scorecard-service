@@ -25,15 +25,17 @@ from fastapi.responses import JSONResponse
 
 from .binning import OTHER_LABEL
 from .config import Config, load_config
+from .reasons import ReasonCodeAssigner, verify_reason_coverage
 from .schemas import (
     CATEGORICAL_LEVELS,
     ErrorDetail,
     ErrorResponse,
     HealthResponse,
+    ReasonCode,
     ScoreRequest,
     ScoreResponse,
 )
-from .scoring import ScoringService
+from .scoring import ScoringService, load_artifact
 from .store import Store
 
 
@@ -47,9 +49,19 @@ class ServiceState:
 
     def load(self, config: Config | None = None) -> None:
         self.config = config or load_config()
-        self.scoring = ScoringService.from_path(self.config.path(self.config.service.model_path))
+        settings = self.config.adverse_action
+        artifact = load_artifact(self.config.path(self.config.service.model_path))
+        reasons = ReasonCodeAssigner(
+            artifact,
+            basis=settings.basis,
+            max_reasons=settings.max_reasons,
+            min_shortfall_points=settings.min_shortfall_points,
+            adverse_bands=settings.adverse_bands,
+        )
+        self.scoring = ScoringService(artifact, reasons=reasons)
         self.store = Store(self.config.path(self.config.service.db_path))
         verify_contract(self.scoring)
+        verify_reason_coverage(reasons, on_prohibited=settings.on_prohibited_basis)
 
 
 state = ServiceState()
@@ -231,4 +243,7 @@ def score(request: ScoreRequest) -> ScoreResponse:
         band=result.band,
         model_version=result.model_version,
         scored_at=result.scored_at,
+        # Derived from the bin indices that were just logged, not stored beside them. Any
+        # decision in the log can be reconstructed from the artifact it was scored under.
+        reason_codes=[ReasonCode(**reason.as_dict()) for reason in result.reason_codes],
     )

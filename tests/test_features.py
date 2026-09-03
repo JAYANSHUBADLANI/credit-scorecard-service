@@ -35,7 +35,6 @@ def base_row() -> dict:
         "REGION_POPULATION_RELATIVE": 0.02,
         "NAME_EDUCATION_TYPE": "Higher education",
         "NAME_INCOME_TYPE": "Working",
-        "NAME_FAMILY_STATUS": "Married",
         "NAME_CONTRACT_TYPE": "Cash loans",
     }
 
@@ -49,9 +48,18 @@ def build_one(**overrides) -> pd.Series:
 
 def test_ages_and_durations_are_positive_years():
     features = build_one()
-    assert features["AGE_YEARS"] == pytest.approx(40.0)
     assert features["EMPLOYED_YEARS"] == pytest.approx(10.0)
     assert features["ID_PUBLISH_YEARS"] == pytest.approx(3650.0 / 365.25)
+
+
+def test_no_age_characteristic_is_derived():
+    """DAYS_BIRTH is accepted and range checked, but nothing is scored on it.
+
+    Age is a prohibited basis outside a demonstrably sound system that does not penalise
+    applicants aged 62 or over, and the card that derived AGE_YEARS penalised them. Asserting
+    the absence is what stops a later edit quietly reintroducing the characteristic.
+    """
+    assert "AGE_YEARS" not in build_one().index
 
 
 def test_ratios_are_computed_as_documented():
@@ -126,7 +134,7 @@ def test_single_record_matches_the_same_record_inside_a_batch():
         base_row(),
         {**base_row(), "EXT_SOURCE_1": None, "AMT_INCOME_TOTAL": 250000.0},
         {**base_row(), "DAYS_EMPLOYED": float(DAYS_EMPLOYED_SENTINEL)},
-        {**base_row(), "AMT_GOODS_PRICE": None, "NAME_FAMILY_STATUS": "Single / not married"},
+        {**base_row(), "AMT_GOODS_PRICE": None, "NAME_INCOME_TYPE": "Pensioner"},
     ]
     batch = build_features(pd.DataFrame(rows))
 

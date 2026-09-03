@@ -2,23 +2,31 @@
 
 Running status for this project. Updated as phases complete.
 
-## Status: all four phases complete, plus a cloud deployment
+## Status: eight phases complete, plus a cloud deployment
 
 The Phase 2 caveat is closed. The container path was written and statically checked for a long
 time without ever being built, because there was no Docker daemon available. That has now been
-built, run, and deployed. The API is live on Google Cloud Run at
-https://credit-scorecard-api-403429711696.us-central1.run.app, and `/docs` is the useful entry
-point. Every number quoted in the README comes from a real run.
+built, run, and deployed. The API was deployed and verified on Google Cloud Run at
+https://credit-scorecard-api-403429711696.us-central1.run.app. It is not answering at present:
+billing is disabled on the project, so treat the URL as a record of the deployment rather than
+a working demo, as the README already says. Every number quoted in the README comes from a real
+run.
+
+Phase 6 added adverse action reason codes, which was meant to be a two day gap closing exercise
+and turned into the most useful thing in the project: writing the disclosure layer surfaced that
+the card allocated points on two prohibited bases and that its age treatment did not satisfy
+Regulation B. Phase 7 removed both, at a measured cost of 0.0003 of holdout AUC, and every number
+in the README comes from the rerun on that card.
 
 ## Phase by phase
 
 ### Phase 1, the scorecard and the scoring API: done
 
 - Refit the simple weight of evidence and logistic scorecard on `application_train.csv`,
-  reusing the established methodology rather than building anything new. 14 characteristics
-  retained from 19 candidates, `CODE_GENDER` excluded as a prohibited basis rather than
-  selected out.
-- Holdout Gini 0.4899, KS 0.3674, AUC 0.7449 on 92,254 held out applications.
+  reusing the established methodology rather than building anything new. 12 characteristics
+  retained from 17 candidates. `CODE_GENDER` excluded as a prohibited basis rather than selected
+  out, and `AGE_YEARS` and `NAME_FAMILY_STATUS` on the same grounds in phase 7.
+- Holdout Gini 0.4892, KS 0.3662, AUC 0.7446 on 92,254 held out applications.
 - FastAPI `/score`, `/health` and `/model` endpoints.
 - Input validation is strict: no silent coercion of strings to numbers, unknown fields
   rejected rather than ignored, explicit ranges on every field, two cross field rules.
@@ -37,7 +45,8 @@ point. Every number quoted in the README comes from a real run.
   context. It passes.
 - **Built and run.** `docker compose up trainer` fitted the card inside the container on all
   215,257 rows and exited 0, reproducing the host's figures exactly, AUC 0.7449 and Gini
-  0.4899. `api` reached healthy and returned 591.09 in band `approve` for a complete
+  0.4899 (the 14 characteristic card, this run predates phase 7 and the figures are left as
+  observed). `api` reached healthy and returned 591.09 in band `approve` for a complete
   application, and 422 for the same application with `CODE_GENDER` added. `monitor` and
   `dashboard` reached healthy too, which they did not before each role was given its own
   healthcheck. `dashboard` served HTTP 200. Rerun on Docker 29.7.2, arm64.
@@ -57,8 +66,8 @@ point. Every number quoted in the README comes from a real run.
 - Streamlit dashboard: stability trends against thresholds, characteristic attribution,
   approval rate and mean predicted PD against their training baselines, the alert table with
   its audit trail, and the monitor run history.
-- 141 tests covering the transformation, the binning, the endpoint, the drift computation, the
-  window mechanics, the debounce, the store and the dashboard.
+- 171 tests covering the transformation, the binning, the endpoint, the drift computation, the
+  window mechanics, the debounce, the store, the dashboard and the reason codes.
 - Single entrypoint: `make demo`.
 - Business write up in `docs/business_case.md`.
 
@@ -80,6 +89,89 @@ point. Every number quoted in the README comes from a real run.
   an explicit amd64 requirement. Rebuilt with `--platform=linux/amd64`, which is what is
   deployed.
 - Only `api` is deployed. `dashboard` and `monitor` are not, see "Still open".
+
+### Phase 6, adverse action reason codes: done
+
+- `POST /score` now returns the principal reasons for a decline. Regulation B requires them, the
+  card produces them almost for free, and the gap was noted as a two day item rather than its
+  own project. It took about that.
+- Points are allocated in one place, `Scorecard.points_by_bin`, which both the card table and
+  the reason codes read. The decomposition is exact: per characteristic points sum to the served
+  score to within 2.3e-13 across all 92,254 held out applications.
+- Two reference profiles are implemented, `max_observed` and `population_mean`. The choice looks
+  technical and changes the notice on 98.4% of declines.
+- `make reasons` audits the whole held out slice and writes `reports/reason_code_frequency.csv`
+  and `reports/adverse_action_audit.json`.
+- A rounding defect was caught by its own test: points, reference and shortfall were each
+  rounded independently for publication, so the three numbers on a notice could disagree by a
+  cent. The shortfall is now derived from the rounded pair.
+
+### Phase 7, the refit the reason codes forced: done
+
+- **The card was allocating points on two prohibited bases.** `NAME_FAMILY_STATUS` is marital
+  status. `AGE_YEARS` is age. The project already excluded `CODE_GENDER` at the request boundary
+  and made a point of saying so, which read as more care than was actually taken, because the
+  same question was never asked of these two.
+- **The age treatment did not satisfy Regulation B.** Points fell monotonically across all 17 age
+  bins, 42.46 at 25 and under against 36.00 above 63.54, so no applicant aged 62 or over could
+  reach the best age points at all. A 6.46 point penalty assigned on age.
+- **The default basis hid it.** Under `max_observed` the bureau scores crowd everything else out
+  of the top four reasons and neither prohibited basis was ever cited. Under `population_mean`
+  age appeared on 136 notices and marital status on 4. The more informative setting is the one
+  that discloses the problem.
+- **Cost measured before deciding, not after.** Four cards fitted in a scratch tree: baseline
+  0.7449 AUC, without age 0.7448, without marital status 0.7447, without both 0.7446. Three ten
+  thousandths, against 0.0014 for gender. The baseline reproduced the committed numbers exactly,
+  which is what made the comparison trustworthy.
+- **Both removed**, from `features` and from the request contract, so a refit cannot pick either
+  up again. `DAYS_BIRTH` stays as an accepted, range checked field, because capacity to contract
+  has to be verified, and nothing is derived from it.
+- **Swap set:** 2,274 of 92,254 held out applications change band, 2.46%. Approval 70.17% to
+  70.21%, bad rate among approved 4.183% to 4.200%. Composition mildly adverse, volume immaterial.
+- `make demo` rerun end to end on the new card: 40,000 requests, 0 rejected, 297 req/s, 20
+  windows, the same 4 alerts firing at the same windows 13 and 18.
+
+## What building the reason codes found
+
+The feature was scoped as a two day gap closing exercise. What it actually did was find a
+compliance defect in a deployed service, which is the argument for building a disclosure layer at
+all: you cannot write down what you are telling an applicant without discovering what you are
+scoring them on.
+
+One consequence worth keeping in view, which is a cost of the refit rather than a defect:
+
+- **Removing a characteristic removes it from everything that watches the card.** The scoring
+  stream still shifts the applicant age distribution, and the per characteristic CSI values are
+  unchanged to four decimals, but there is no longer an age bin population to compute a CSI
+  against, so a deliberate part of the injected shift is now invisible to attribution. It still
+  reaches the score through the characteristics correlated with it.
+
+### Phase 8, the two fixes this left behind: done
+
+- **A prohibited basis gate at fit time.** `src/train.py` now calls
+  `verify_no_prohibited_basis(selected, ...)` immediately after feature selection and before the
+  card is fitted, and it **raises** by default. That is the opposite of the same check at
+  serving, deliberately: refusing to produce an artifact costs a failed training run, refusing to
+  serve costs an outage on a card already scoring. `on_prohibited_basis_at_fit: warn` lowers it,
+  which is how the cost of removing age and marital status was measured in the first place.
+- **The compliance list is now a registry**, `PROHIBITED_BASES`, separate from the applicant
+  facing statements. A characteristic can be retained without anybody having written a notice
+  statement for it, and that is exactly the case the gate must catch, so the two cannot be one
+  list. `ReasonStatement` no longer carries its own copy of the flag.
+- **The reference profile default changed to `population_mean`, on measurement.** The
+  informativeness complaint was weak on its own. Measuring it turned it into an accuracy
+  question: under `max_observed`, 1,417 of 36,040 reasons named a characteristic the applicant
+  sat at or above the population average on, putting at least one such reason on 15.3% of
+  notices. Such a characteristic did nothing to distinguish that applicant from the approved
+  population, so calling it a *principal* reason is a stretch. Under `population_mean` it is
+  impossible by construction. The audit now reports the figure for both bases, so the choice
+  stays checkable on the next card.
+- One test was found to be asserting a ranking side effect while claiming to test wording: it
+  pinned `EXT_SOURCE_1` as the missing-value example and broke the moment the default basis
+  changed which characteristics reach the top four. Rewritten as an invariant over whatever is
+  cited, with a guard that the case is actually exercised.
+- 171 tests. No model refit was needed: the basis governs the notice, not the score, so bands,
+  cutoffs and every monitoring number are unchanged.
 
 ## Things worth knowing that came out of building it
 
@@ -132,6 +224,13 @@ point. Every number quoted in the README comes from a real run.
    store moves to Cloud SQL or if authentication is put in front of `/score`.
 7. **`/score` is unauthenticated and `/docs` is public.** A deliberate choice for a public
    portfolio demo over a public Kaggle dataset, and the wrong choice for anything real.
+8. **The deployed image is two model versions behind.** Cloud Run was built from the 14
+   characteristic card. Nothing is being served to anyone, because billing is disabled, but a
+   rebuild and redeploy is needed before the URL matches the model this README describes.
+9. **The prohibited basis gate matches on names.** `PROHIBITED_BASES` catches the characteristics
+   it names. An age band retained as `LIFE_STAGE`, or any prohibited basis reconstructed under a
+   different name, passes it. Catching that properly needs feature provenance, which the
+   transformation path does not currently record.
 
 `.gitignore` commits all of `reports/`, about 100 KB, because those files are the evidence
 behind every number in the README, and excluding them would make the claims uncheckable without

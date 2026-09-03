@@ -1,0 +1,24 @@
+{
+  "model_version": "1.0.0",
+  "basis": "population_mean",
+  "max_reasons": 4,
+  "holdout_rows": 92254,
+  "declines": 9010,
+  "decline_rate": 0.0977,
+  "max_points_score_gap": 2.2737367544323206e-13,
+  "declines_with_no_reason": 0,
+  "mean_reasons_per_decline": 4.0,
+  "reasons_cited": 36040,
+  "reasons_naming_an_above_average_characteristic": 0,
+  "notices_with_an_above_average_reason": 0,
+  "above_average_notice_share": 0.0,
+  "declines_where_bases_disagree": 8895,
+  "disagreement_share": 0.9872,
+  "alternate_basis": "max_observed",
+  "prohibited_basis_features": {},
+  "prohibited_basis_citations": {},
+  "regulation_b_age_check": {
+    "applicable": false,
+    "reason": "AGE_YEARS is not a retained characteristic"
+  }
+}

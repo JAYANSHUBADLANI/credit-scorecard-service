@@ -2,7 +2,7 @@ PYTHON ?= python3
 API_HOST ?= 127.0.0.1
 API_PORT ?= 8000
 
-.PHONY: help install install-dev train demo api monitor monitor-once stream dashboard test noise compose-check clean clean-data
+.PHONY: help install install-dev train demo api monitor monitor-once stream dashboard test noise reasons compose-check clean clean-data
 
 help:
 	@echo "make install       install the pinned runtime dependencies"
@@ -16,6 +16,7 @@ help:
 	@echo "make dashboard     open the monitoring dashboard on 8501"
 	@echo "make test          run the test suite"
 	@echo "make noise         measure the stability index noise floor by window size"
+	@echo "make reasons       audit the adverse action reason codes on the held out slice"
 	@echo "make compose-check validate the compose file without a Docker daemon"
 	@echo "make clean         remove caches"
 	@echo "make clean-data    also remove the monitoring database and generated reports"
@@ -54,6 +55,9 @@ test:
 noise:
 	$(PYTHON) scripts/window_size_noise.py
 
+reasons:
+	$(PYTHON) scripts/adverse_action_audit.py
+
 compose-check:
 	$(PYTHON) scripts/validate_compose.py
 
@@ -64,3 +68,4 @@ clean:
 clean-data:
 	rm -f data/monitoring.db data/monitoring.db-wal data/monitoring.db-shm
 	rm -f reports/drift_metrics.csv reports/window_summary.csv reports/alerts.csv
+	rm -f reports/reason_code_frequency.csv reports/adverse_action_audit.json

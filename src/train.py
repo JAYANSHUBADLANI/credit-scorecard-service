@@ -26,6 +26,7 @@ from .binning import BinningConfig, WOETransformer
 from .config import Config, load_config
 from .features import RAW_INPUTS, build_features
 from .drift import BAND_ORDER
+from .reasons import verify_no_prohibited_basis
 from .scorecard import BandCutoffs, ScalingConfig, Scorecard, ScorecardArtifact, select_features
 
 MODEL_VERSION = "1.0.0"
@@ -131,6 +132,9 @@ def train(config: Config | None = None) -> Dict[str, object]:
     )
     if not selected:
         raise RuntimeError("no characteristic cleared the information value floor")
+
+    # Before the card is fitted, not after it is deployed. See reasons.verify_no_prohibited_basis.
+    verify_no_prohibited_basis(selected, config.adverse_action.on_prohibited_basis_at_fit)
 
     scaling = ScalingConfig(
         base_score=config.scaling.base_score,

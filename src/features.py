@@ -6,6 +6,9 @@ derived one way offline and another way online. Training and serving skew in der
 is one of the commonest causes of a model that validates well and then behaves oddly in
 production, and keeping one implementation is the cheapest possible defence against it.
 
+`DAYS_BIRTH` is accepted and range checked but no longer produces a feature. See the comment
+in `build_features` for why the field is still collected.
+
 `DAYS_EMPLOYED` carries a sentinel of 365243 in this dataset, which is roughly a thousand
 years of employment and marks a pensioner with no employment record. Left alone it would sit
 in the top bin of an otherwise sensible characteristic. It is mapped to missing, which is what
@@ -37,15 +40,14 @@ RAW_NUMERIC_INPUTS: List[str] = [
     "REGION_POPULATION_RELATIVE",
 ]
 
-# CODE_GENDER is not here on purpose. Gender is a prohibited basis for a credit decision
-# under ECOA and Regulation B, so it is excluded at the input boundary rather than merely
-# left out of the model: a field the service never accepts cannot be reintroduced by a
-# later refit that widens the feature list. See README, "Characteristics deliberately
-# excluded".
+# CODE_GENDER and NAME_FAMILY_STATUS are not here on purpose. Gender and marital status are
+# both prohibited bases for a credit decision under ECOA and Regulation B, so they are excluded
+# at the input boundary rather than merely left out of the model: a field the service never
+# accepts cannot be reintroduced by a later refit that widens the feature list. See README,
+# "Characteristics deliberately excluded".
 RAW_CATEGORICAL_INPUTS: List[str] = [
     "NAME_EDUCATION_TYPE",
     "NAME_INCOME_TYPE",
-    "NAME_FAMILY_STATUS",
     "NAME_CONTRACT_TYPE",
 ]
 
@@ -72,7 +74,13 @@ def build_features(frame: pd.DataFrame) -> pd.DataFrame:
     days_employed = pd.to_numeric(frame["DAYS_EMPLOYED"], errors="coerce")
     days_employed = days_employed.where(days_employed != DAYS_EMPLOYED_SENTINEL, np.nan)
 
-    out["AGE_YEARS"] = -pd.to_numeric(frame["DAYS_BIRTH"], errors="coerce") / DAYS_PER_YEAR
+    # DAYS_BIRTH is accepted and range checked, but no age characteristic is derived from it.
+    # Age is a prohibited basis except in an empirically derived, demonstrably sound system that
+    # does not penalise applicants aged 62 or over, and the card that did derive AGE_YEARS
+    # penalised them by 6.46 points. The field stays in the contract because an applicant still
+    # has to be of age to contract, which is what the 18 to 100 bounds in schemas.py check, and
+    # because the scoring stream measures a population shift on it. Validating a field is not
+    # scoring on it.
     out["EMPLOYED_YEARS"] = -days_employed / DAYS_PER_YEAR
     out["ID_PUBLISH_YEARS"] = (
         -pd.to_numeric(frame["DAYS_ID_PUBLISH"], errors="coerce") / DAYS_PER_YEAR

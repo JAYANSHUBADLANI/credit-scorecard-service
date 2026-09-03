@@ -19,7 +19,12 @@ features:
     - EXT_SOURCE_1
     - EXT_SOURCE_2
     - EXT_SOURCE_3
-    - AGE_YEARS
+    # AGE_YEARS was removed after the adverse action audit. Age may be used in an empirically
+    # derived, demonstrably sound scoring system, but not to assign a negative factor to
+    # applicants aged 62 or over, and the fitted card did exactly that: points fell
+    # monotonically across all 17 age bins, 42.46 at 25 and under against 36.00 above 63.54,
+    # so no applicant of 62 or more could reach the best age points at all. Cost of removing
+    # it, measured rather than assumed: 0.0001 of holdout AUC.
     - EMPLOYED_YEARS
     - ID_PUBLISH_YEARS
     - PHONE_CHANGE_YEARS
@@ -31,14 +36,15 @@ features:
     - ANNUITY_INCOME_RATIO
     - CREDIT_TERM
     - GOODS_CREDIT_RATIO
-  # CODE_GENDER is deliberately absent. Gender is a prohibited basis under ECOA and
-  # Regulation B, and a card that allocates points on it could not be signed off however
-  # well it discriminated. Dropping it costs 0.0014 of holdout AUC, measured, so the trade
-  # is not close. See README, "Characteristics deliberately excluded".
+  # CODE_GENDER is deliberately absent, and so is NAME_FAMILY_STATUS. Gender and marital
+  # status are both prohibited bases under ECOA and Regulation B, and a card that allocates
+  # points on either could not be signed off however well it discriminated. Neither is in the
+  # request contract, so a later refit cannot quietly pick one up again. Measured cost:
+  # 0.0014 of holdout AUC for gender, 0.0002 for marital status. Neither trade is close.
+  # See README, "Characteristics deliberately excluded".
   categorical:
     - NAME_EDUCATION_TYPE
     - NAME_INCOME_TYPE
-    - NAME_FAMILY_STATUS
     - NAME_CONTRACT_TYPE
 
 binning:
@@ -106,3 +112,35 @@ service:
   db_path: "data/monitoring.db"
   model_path: "models/scorecard.joblib"
   reference_path: "models/reference.json"
+
+# Regulation B requires that a declined applicant is told the principal reasons. These settings
+# decide what "principal" means on this card. See src/reasons.py for why each one matters.
+adverse_action:
+  # max_observed: the reference is the best attainable bin of the characteristic.
+  # population_mean: the reference is the training population's average points for it.
+  #
+  # Changed from max_observed on measurement rather than preference. Under max_observed, 1,417
+  # of 36,040 reasons named a characteristic the applicant sat at or above the population
+  # average on, putting at least one such reason on 15.3% of notices: a factor that did nothing
+  # to distinguish them from the approved population, cited as a principal reason for their
+  # decline. Under population_mean that is impossible by construction. It rewrote 98.7% of
+  # notices, which is why it needed the number behind it. See src/reasons.py.
+  basis: "population_mean"
+  # Regulation B's commentary treats disclosure of more than four reasons as unhelpful to the
+  # applicant rather than more transparent.
+  max_reasons: 4
+  # A shortfall below this is rounding, not a reason. Points are reported to two decimals.
+  min_shortfall_points: 0.05
+  # Bands that constitute an adverse action. `refer` is not one: it is a referral to manual
+  # underwriting, and no decision has been made yet to give reasons for.
+  adverse_bands:
+    - decline
+  # What to do when the *served* card allocates points on a prohibited basis. `warn` serves and
+  # reports it on stderr; `raise` refuses to boot. Default is warn, matching the contract check:
+  # by then the card is already deployed and scoring, and an outage is the wrong answer to a
+  # modelling decision.
+  on_prohibited_basis: "warn"
+  # The same question asked at fit time, which is where it belongs and where it is free, because
+  # nothing has been built on the card yet. `raise` refuses to produce the artifact at all.
+  # Set to `warn` only to fit one deliberately and measure what it costs.
+  on_prohibited_basis_at_fit: "raise"
