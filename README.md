@@ -1,8 +1,12 @@
 # Credit scorecard serving and drift monitoring
 
+[![tests](https://github.com/JAYANSHUBADLANI/credit-scorecard-service/actions/workflows/tests.yml/badge.svg)](https://github.com/JAYANSHUBADLANI/credit-scorecard-service/actions/workflows/tests.yml)
+
+CI runs the 90 tests that do not need the fitted artifact. The other 81 need `make train` on the raw Home Credit data first and run locally.
+
 I built a scoring API for an application credit scorecard, containerised it, deployed it to
-Google Cloud Run where it is
-[live now](https://credit-scorecard-api-403429711696.us-central1.run.app/docs), and then built a
+Google Cloud Run (the deployment is recorded below; it is not currently serving, because billing
+on the project is off), and then built a
 drift monitoring system on top of it that keeps running: a stream of scoring requests, rolling
 population and characteristic stability indices against the training time reference, threshold
 alerting with a debounce so it does not fire on noise, and a dashboard showing all of it.
@@ -100,12 +104,19 @@ make install && make demo
 
 That fits the card, starts the API, posts the simulated stream to it over HTTP, runs the
 monitor over every complete window, writes the history to `reports/`, and prints a summary. It
-took 143 seconds on my machine, see `reports/end_to_end_summary.json` for the exact figure.
+took 136 seconds on my machine, see `reports/end_to_end_summary.json` for the exact figure.
 
 Then to look at it:
 
 ```bash
 make dashboard
+```
+
+To audit what a declined applicant would actually be told, which is where the Regulation B
+findings below come from:
+
+```bash
+make reasons
 ```
 
 The containerised path, which stands up all five services in dependency order:
@@ -116,7 +127,8 @@ docker compose up --build
 
 The API has been deployed to Google Cloud Run at the URL below. It is not answering at present,
 because billing is disabled on the project rather than because anything is wrong with the
-service, and the deployed image predates the removal of `CODE_GENDER`. Treat it as a record of
+service, and the deployed image predates both the removal of `CODE_GENDER` and the adverse
+action reason codes. Treat it as a record of
 the deployment rather than a working demo, and see "Containerisation and cloud deployment"
 below for both details:
 
@@ -141,13 +153,13 @@ kept as their own bin rather than imputed, characteristics kept above an informa
 floor of 0.02 and dropped when correlated above 0.75, logistic regression on the weight of
 evidence columns, scaled to 600 points at 50:1 odds with 20 points per doubling.
 
-14 characteristics retained from 19 candidates. Measured on the 92,254 held out applications:
+12 characteristics retained from 17 candidates. Measured on the 92,254 held out applications:
 
 | Metric | Training | Held out |
 |---|---|---|
-| AUC | 0.7387 | 0.7449 |
-| Gini | 0.4774 | 0.4899 |
-| KS | 0.3545 | 0.3674 |
+| AUC | 0.7385 | 0.7446 |
+| Gini | 0.4770 | 0.4892 |
+| KS | 0.3547 | 0.3662 |
 | Bad rate | 8.13% | 7.95% |
 
 Bands are set as percentiles of the training score distribution and then frozen as absolute
@@ -156,9 +168,9 @@ the held out slice:
 
 | Band | Score | Share | Bad rate |
 |---|---|---|---|
-| Decline | below 532.45 | 9.8% | 25.3% |
-| Refer | 532.45 to 553.26 | 20.0% | 12.6% |
-| Approve | 553.26 and above | 70.2% | 4.2% |
+| Decline | below 532.42 | 9.8% | 25.2% |
+| Refer | 532.42 to 553.20 | 20.0% | 12.7% |
+| Approve | 553.20 and above | 70.2% | 4.2% |
 
 Held out AUC slightly above training is normal for a regularised model on a different slice
 and is not something I have tuned toward.
@@ -171,7 +183,10 @@ Gender is a prohibited basis under ECOA and Regulation B. A card that allocates 
 cannot be signed off however well it ranks, so the question was never whether the lift
 justified it. I measured the cost anyway, because "it was not worth much" is a weaker claim
 than a number: held out AUC falls from 0.7463 to 0.7449, fourteen ten thousandths, and the
-characteristic ranked eleventh of twenty by information value. It was never load bearing.
+characteristic ranked eleventh of twenty by information value. It was never load bearing. Those
+two figures were measured on the 14 characteristic card that then stood, and are left as
+measured rather than restated against the current one, because `CODE_GENDER` is no longer in
+`RAW_INPUTS` and the comparison cannot be rerun without putting it back.
 
 Excluding it at the boundary rather than merely dropping it from `features.categorical` is
 deliberate. A field the service still accepts is one refit away from being scored on again,
@@ -184,6 +199,22 @@ characteristics that stayed, and proxy discrimination through correlated inputs 
 effect that removing one column does not touch. Measuring it needs outcome data by protected
 class, which this extract does not carry. Excluding the direct use is the necessary step here,
 not the sufficient one.
+
+**`NAME_FAMILY_STATUS` is excluded on the same grounds, and it was not always.** Marital status
+is a prohibited basis in its own right, and it sat on the card, scored on, until building the
+adverse action reason codes forced the question. So did `AGE_YEARS`, whose treatment penalised
+applicants aged 62 or over by 6.46 points, which Regulation B does not permit. Both are now out
+of the feature list and out of the request contract, at a measured cost of 0.0003 of holdout AUC
+against the 0.0014 that gender cost.
+
+`DAYS_BIRTH` is the one deliberate asymmetry. The field is still accepted and range checked,
+because an applicant has to be of age to contract, and those 18 to 100 bounds are what check it.
+No characteristic is derived from it. Validating a field is not scoring on it, and
+`tests/test_features.py` asserts that no age characteristic comes out of `build_features`.
+
+Excluding one prohibited basis loudly, as this section did for gender, turned out to be
+compatible with quietly scoring two others. That is the more useful lesson than the exclusion
+itself. See Adverse action reason codes.
 
 ## The scoring API
 
@@ -234,15 +265,180 @@ whole service down at boot. On this data that is not hypothetical: `Maternity le
 on 8% of refits. It was refusing to serve over a distinction the card cannot draw, since six
 of the declared levels share the catch all in a normal fit.
 
-Measured over the 40,000 request run: mean latency 2.53 ms, p95 2.65 ms, 285.5 requests per
+Measured over the 40,000 request run: mean latency 2.40 ms, p95 2.46 ms, 297.0 requests per
 second single threaded, 0 rejections. See `reports/end_to_end_summary.json` for the full
 latency distribution and `reports/stream_manifest.json` for the throughput figure.
+
+## Adverse action reason codes
+
+`POST /score` returns the principal reasons for a decline alongside the decision. Regulation B
+requires that a declined applicant is told them, and a points based weight of evidence card
+produces them almost for free: the score is already a sum of per characteristic points, so the
+principal reasons are the characteristics on which the applicant lost the most points against a
+reference profile.
+
+```json
+{
+  "band": "decline",
+  "score": 496.18,
+  "reason_codes": [
+    {"rank": 1, "code": "AA03", "statement": "External credit bureau score (source 3) below the level required",
+     "points": 17.18, "reference_points": 49.62, "shortfall": 32.44},
+    {"rank": 2, "code": "AA02", "statement": "External credit bureau score (source 2) below the level required",
+     "points": 20.37, "reference_points": 49.25, "shortfall": 28.88},
+    {"rank": 3, "code": "AA04", "statement": "Level of education recorded on the application",
+     "points": 38.38, "reference_points": 46.89, "shortfall": 8.51},
+    {"rank": 4, "code": "AA05", "statement": "Length of employment too short",
+     "points": 41.83, "reference_points": 47.03, "shortfall": 5.20}
+  ]
+}
+```
+
+`approve` and `refer` return an empty list. A referral is not a decision and an approval is not
+adverse, so neither has reasons to give, and returning them would invite them to be presented as
+though a decision had gone against the applicant.
+
+The points are published with the statement because a reason nobody can check is a reason nobody
+can contest. That rests on the decomposition being exact: the per characteristic points sum to
+the served score to within **2.3e-13** across all 92,254 held out applications, asserted in the
+audit rather than assumed. Allocation is computed in one place, so the card a credit committee
+reviews and the notice an applicant receives cannot disagree.
+
+### What building this found, and what it changed
+
+This section is the reason the feature was worth building, and it is not about reason codes.
+
+**The card was allocating points on two prohibited bases.** `AGE_YEARS` and
+`NAME_FAMILY_STATUS` were both retained by the fit. Marital status is a prohibited basis under
+ECOA outright. Age may be used in an empirically derived, demonstrably sound scoring system, but
+not to assign a negative factor to applicants aged 62 or over, and the fitted card did exactly
+that:
+
+```
+best age points at any age                    42.46   (bin: 25.73 years and under)
+best available to an applicant 62 or over     37.29   (bin: 58.38 to 63.54 years)
+worst available to an applicant 62 or over    36.00   (bin: 63.54 years and over)
+```
+
+Age points fell monotonically across all 17 bins, so no applicant aged 62 or over could reach
+the best age points at all. A 6.46 point penalty, a third of a doubling of odds.
+
+I did not notice either of these until a reason code had to name them to an applicant. The
+project already excluded `CODE_GENDER` at the request boundary and said so prominently, which
+reads as more care than was actually taken: the same question was simply never asked of the
+other two.
+
+**What made it worse is that the default configuration hid it.** Under `max_observed` the three
+bureau scores crowd everything else out of the top four reasons, so neither prohibited basis was
+ever cited on a notice. Under `population_mean` age appeared on 136 notices and marital status
+on 4. The setting that disclosed the problem was the more informative one, and the default at the
+time was the one that kept it quiet. That default has since changed, for a separate reason and on
+separate evidence, which is set out below under Choosing the reference profile.
+
+**Both characteristics have been removed**, from the feature list and from the request contract,
+so a later refit cannot pick either up again. `DAYS_BIRTH` is still accepted, because an
+applicant has to be of age to contract and the 18 to 100 bounds are what check it. It is
+validated and never scored. The measured cost, taken before deciding rather than after:
+
+| Card | Holdout AUC | vs baseline | Gini | Cutoffs |
+|---|---|---|---|---|
+| 14 characteristics, as originally fitted | 0.7449 | - | 0.4899 | 532.45 / 553.26 |
+| without `AGE_YEARS` | 0.7448 | −0.0001 | 0.4896 | 532.45 / 553.23 |
+| without `NAME_FAMILY_STATUS` | 0.7447 | −0.0002 | 0.4894 | 532.45 / 553.18 |
+| **without both, what is now served** | **0.7446** | **−0.0003** | 0.4892 | 532.42 / 553.20 |
+
+Three ten thousandths of AUC, against the 0.0014 that dropping `CODE_GENDER` cost. The trade is
+not close, in the same way and for the same reason.
+
+The swap set, which is the question a business asks immediately: 2,274 of the 92,254 held out
+applications change band, 2.46%. The approval rate moves from 70.17% to 70.21% and the bad rate
+among approved applications from 4.183% to 4.200%, seventeen thousandths of a percentage point.
+The composition of the swap is mildly adverse, 382 applications moving from decline to refer
+carry a realised bad rate of 20.94% against 16.43% for the 353 moving the other way, but at that
+volume it is noise against a book bad rate of 7.95%.
+
+`make reasons` now reports `AGE_YEARS is not a retained characteristic` for the Regulation B age
+check, and the prohibited basis warning at startup is silent. The guard stays in place, and
+`tests/test_reasons.py` asserts both that the current card carries no prohibited basis and that
+the warning still fires on one that does.
+
+### Choosing the reference profile, on evidence
+
+The first version of this shipped with `max_observed` as the default, which is the more common
+industry choice, and produced notices that were nearly all identical: four characteristics filled
+all four reason slots on more than 93% of declines. That looked like an informativeness problem
+and I left it alone, on the grounds that "the notices are boring" is a weak reason to rewrite
+every one of them.
+
+Measuring it properly turned it into an accuracy problem, which is a different argument.
+
+Under `max_observed` a characteristic is cited because its point range is wide, whether or not
+this applicant is unusual on it. Over the 9,010 held out declines, **1,417 of 36,040 reasons
+named a characteristic the applicant sat at or above the population average on, putting at least
+one such reason on 15.3% of notices.** A characteristic an applicant is above average on did
+nothing to distinguish them from the applicants who were approved. "Below the level required" is
+literally true of anyone declined, so the statement is not false, but calling it a *principal*
+reason for their decline is a stretch, and principal is the word Regulation B uses.
+
+Under `population_mean` that cannot happen: a positive shortfall means below average by
+definition. The audit reports the figure for both, so the choice stays checkable on the next
+card rather than inherited from this one.
+
+The default is now `population_mean`. It changed the notice on 8,895 of 9,010 declines, 98.7%,
+which is why it wanted a measurement behind it and not a preference. It also spreads the
+citations across 12 characteristics instead of 7:
+
+| Code | Characteristic | Cited on | Cited first |
+|---|---|---|---|
+| AA03 | `EXT_SOURCE_3` | 93.5% | 47.8% |
+| AA02 | `EXT_SOURCE_2` | 81.4% | 40.8% |
+| AA05 | `EMPLOYED_YEARS` | 61.3% | 0.0% |
+| AA06 | `GOODS_CREDIT_RATIO` | 55.3% | 4.3% |
+| AA07 | `CREDIT_TERM` | 47.7% | 0.0% |
+| AA01 | `EXT_SOURCE_1` | 32.6% | 7.0% |
+| AA04 | `NAME_EDUCATION_TYPE` | 24.7% | 0.1% |
+| AA08 | `AMT_CREDIT` | 2.5% | 0.0% |
+| AA09 | `ID_PUBLISH_YEARS` | 0.4% | 0.0% |
+| AA12 | `NAME_INCOME_TYPE` | 0.3% | 0.0% |
+| AA11 | `REGION_POPULATION_RELATIVE` | 0.3% | 0.0% |
+| AA10 | `PHONE_CHANGE_YEARS` | 0.0% | 0.0% |
+
+The bureau scores still lead, which is correct rather than a failure: they carry the most
+information on this card and they genuinely are the principal reason most declines happen. What
+changed is that the notice now also names what is specific to the applicant.
+
+`max_observed` remains available as a config edit, and both are reported by `make reasons`.
+
+### The check that should have existed first
+
+The prohibited bases were found by accident, while building something else. The fix for that is
+not vigilance, it is a check in the place where the question is free to ask:
+
+```python
+# src/train.py, immediately after feature selection and before the card is fitted
+verify_no_prohibited_basis(selected, config.adverse_action.on_prohibited_basis_at_fit)
+```
+
+It **raises** by default, which is the opposite of the same check at serving. Refusing to produce
+an artifact costs a failed training run. Refusing to serve costs an outage on a card that is
+already deployed and already scoring, so that one warns. `on_prohibited_basis_at_fit: warn`
+lowers the gate deliberately, which is how the cost of removing age and marital status was
+measured in the first place.
+
+The compliance list is a registry in `src/reasons.py`, `PROHIBITED_BASES`, deliberately separate
+from the applicant facing statements. A characteristic can be retained by a fit without anybody
+having written a notice statement for it, and that is exactly the case the gate has to catch, so
+the two lists cannot be the same list.
+
+The honest limit is that it matches on characteristic names. An age band retained under some
+other name, `LIFE_STAGE` say, passes it. It catches what the registry names, which is worth
+having and is not the same as proving a card is clean.
 
 ## Containerisation and cloud deployment
 
 An earlier version of this README said the image had never been built and the stack had never
-been run. That is no longer true. The stack has been built and run locally, and the API is
-deployed and serving on Google Cloud Run:
+been run. That is no longer true. The stack has been built and run locally, and the API was
+deployed to Google Cloud Run at this URL (currently returning 503, see above):
 
 **https://credit-scorecard-api-403429711696.us-central1.run.app/docs**
 
@@ -252,7 +448,11 @@ The bare root path returns 404 on purpose, since no route is defined there.
 ### What runs locally
 
 `docker compose up --build` stands up the whole thing. What I actually observed running it, on
-Docker 29.7.2 against an arm64 host:
+Docker 29.7.2 against an arm64 host. **This run predates the removal of `AGE_YEARS` and
+`NAME_FAMILY_STATUS`**, so the figures below are the 14 characteristic card's, and they are left
+as observed rather than restated: the point of the section is that the containerised path
+reproduced the host exactly on the day it was run, and rewriting the numbers to match a later
+card would destroy the only claim it makes.
 
 - `trainer` fitted the card inside the container on the full 215,257 rows and exited 0,
   reproducing the host's figures exactly: 14 characteristics, holdout AUC 0.7449, Gini 0.4899,
@@ -263,7 +463,8 @@ Docker 29.7.2 against an arm64 host:
 - A `/score` request with a complete application returned 591.09 in band `approve`, the same
   score to the cent the host returns for that application.
 - The same request with `CODE_GENDER` added came back 422, so the exclusion holds through the
-  served path rather than only in the tests.
+  served path rather than only in the tests. `NAME_FAMILY_STATUS` is now refused the same way,
+  which this run is too old to show.
 - `monitor` and `dashboard` reached `healthy` as well, which is the point of giving each role
   its own healthcheck. Both used to inherit the image's probe against the API port, which
   neither of them serves, and so reported unhealthy for their whole lives while working
@@ -495,30 +696,30 @@ From `make demo`: 40,000 requests, 0 rejected, 20 windows of 2,000, 4 alerts.
 
 | Window | Regime | Score PSI | Band PSI | Approval rate | Mean PD | Status |
 |---|---|---|---|---|---|---|
-| 1 | stable | 0.0062 | 0.0003 | 69.3% | 0.082 | ok |
-| 2 | stable | 0.0017 | 0.0001 | 69.7% | 0.082 | ok |
-| 3 | stable | 0.0077 | 0.0008 | 69.2% | 0.082 | ok |
-| 4 | stable | 0.0060 | 0.0019 | 69.8% | 0.081 | ok |
-| 5 | stable | 0.0052 | 0.0003 | 70.0% | 0.083 | ok |
-| 6 | stable | 0.0025 | 0.0011 | 70.0% | 0.080 | ok |
-| 7 | stable | 0.0043 | 0.0010 | 69.3% | 0.080 | ok |
-| 8 | stable | 0.0074 | 0.0008 | 68.8% | 0.082 | ok |
-| 9 | ramping | 0.0138 | 0.0070 | 66.3% | 0.086 | ok |
-| 10 | ramping | 0.0977 | 0.0769 | 57.8% | 0.104 | ok |
-| 11 | ramping | 0.3025 | 0.2594 | 47.1% | 0.127 | **breach** |
-| 12 | ramping | 0.5250 | 0.4317 | 39.9% | 0.143 | **breach** |
-| 13 | plateau | 0.6414 | 0.5547 | 36.9% | 0.154 | **ALERT FIRED** |
-| 14 | plateau | 0.5945 | 0.4898 | 38.8% | 0.150 | breach, cooldown |
-| 15 | plateau | 0.5719 | 0.4857 | 39.1% | 0.148 | breach, cooldown |
-| 16 | plateau | 0.6144 | 0.4793 | 38.9% | 0.148 | breach, cooldown |
-| 17 | plateau | 0.6024 | 0.4983 | 38.0% | 0.150 | breach, cooldown |
-| 18 | plateau | 0.5508 | 0.4346 | 40.4% | 0.147 | **ALERT REFIRED** |
-| 19 | plateau | 0.5708 | 0.4554 | 39.4% | 0.148 | breach, cooldown |
-| 20 | plateau | 0.6363 | 0.5464 | 36.8% | 0.151 | breach, cooldown |
+| 1 | stable | 0.0032 | 0.0014 | 68.4% | 0.083 | ok |
+| 2 | stable | 0.0035 | 0.0003 | 69.2% | 0.082 | ok |
+| 3 | stable | 0.0059 | 0.0006 | 69.2% | 0.082 | ok |
+| 4 | stable | 0.0047 | 0.0015 | 70.3% | 0.081 | ok |
+| 5 | stable | 0.0042 | 0.0002 | 69.6% | 0.083 | ok |
+| 6 | stable | 0.0023 | 0.0009 | 70.0% | 0.080 | ok |
+| 7 | stable | 0.0040 | 0.0021 | 69.0% | 0.080 | ok |
+| 8 | stable | 0.0050 | 0.0006 | 69.1% | 0.082 | ok |
+| 9 | ramping | 0.0150 | 0.0081 | 65.9% | 0.086 | ok |
+| 10 | ramping | 0.1009 | 0.0801 | 57.4% | 0.105 | ok |
+| 11 | ramping | 0.3154 | 0.2717 | 46.8% | 0.128 | **breach** |
+| 12 | ramping | 0.5449 | 0.4539 | 38.9% | 0.145 | **breach** |
+| 13 | plateau | 0.6615 | 0.5624 | 36.7% | 0.155 | **ALERT FIRED** |
+| 14 | plateau | 0.6101 | 0.5068 | 38.2% | 0.151 | breach, cooldown |
+| 15 | plateau | 0.5958 | 0.5012 | 38.6% | 0.150 | breach, cooldown |
+| 16 | plateau | 0.6337 | 0.4817 | 38.9% | 0.150 | breach, cooldown |
+| 17 | plateau | 0.6284 | 0.5233 | 37.1% | 0.151 | breach, cooldown |
+| 18 | plateau | 0.5707 | 0.4465 | 40.2% | 0.149 | **ALERT REFIRED** |
+| 19 | plateau | 0.5985 | 0.4848 | 38.2% | 0.149 | breach, cooldown |
+| 20 | plateau | 0.6580 | 0.5595 | 36.5% | 0.152 | breach, cooldown |
 
 This is the full lifecycle in one run:
 
-- **Eight stable windows, zero false positives.** Score PSI between 0.0017 and 0.0077, against
+- **Eight stable windows, zero false positives.** Score PSI between 0.0023 and 0.0059, against
   a warn threshold of 0.10. 16,000 requests through the monitor without a single spurious
   alert.
 - **Detection is gradual, as designed.** The index moves at window 9, is clearly elevated at
@@ -528,38 +729,51 @@ This is the full lifecycle in one run:
 - **The cooldown suppressed four repeats.** Windows 14 through 17 were still in breach and
   still recorded as such. No notification. The alert refired at window 18, exactly five windows
   after the first, and reported an 8 window consecutive run.
-- **Approval rate fell from 69% to 37%** and mean predicted PD nearly doubled from 0.082 to
-  0.151. This is the business consequence the monitoring exists to surface.
+- **Approval rate fell from 68% to 37%** and mean predicted PD nearly doubled from 0.083 to
+  0.152. This is the business consequence the monitoring exists to surface.
 
 The attribution, ranked from the final window:
 
 | Characteristic | CSI | Status | Injected? |
 |---|---|---|---|
 | EXT_SOURCE_2 | 0.4702 | alert | yes |
-| AGE_YEARS | 0.4074 | alert | yes |
 | EXT_SOURCE_3 | 0.3751 | alert | yes |
-| EMPLOYED_YEARS | 0.1991 | warn | no, correlated with age |
-| NAME_INCOME_TYPE | 0.1255 | warn | no, correlated with age |
+| EMPLOYED_YEARS | 0.1991 | warn | no, correlated with the age shift |
+| NAME_INCOME_TYPE | 0.1255 | warn | no, correlated with the age shift |
 | EXT_SOURCE_1 | 0.1049 | warn | no, correlated with the other bureau scores |
 | ID_PUBLISH_YEARS | 0.0724 | ok | no |
-| ... | | | |
+| PHONE_CHANGE_YEARS | 0.0568 | ok | no |
+| CREDIT_TERM | 0.0409 | ok | no |
+| AMT_CREDIT | 0.0329 | ok | no |
 | REGION_POPULATION_RELATIVE | 0.0229 | ok | no |
 | GOODS_CREDIT_RATIO | 0.0136 | ok | no |
 | NAME_EDUCATION_TYPE | 0.0134 | ok | no |
 
-The three characteristics I injected the shift into rank first, second and third. The next
+Two of the three characteristics I injected the shift into rank first and second. The next
 three are the ones genuinely correlated with them, which is correct behaviour rather than
 noise. Characteristics I did not touch stayed flat, the whole bottom half of the card under
-0.06 while the injected three sit above 0.37. An analyst handed this alert would be pointed at
-the bureau scores and the age mix immediately.
+0.06 while the injected two sit above 0.37.
+
+**The third injected characteristic is age, and it is no longer in this table.** The stream
+still shifts the applicant age distribution exactly as before, and the CSI values above are
+unchanged to four decimal places from the run on the previous card, because the same seeded
+draw delivers the same applications. But the card no longer carries an age characteristic, so
+the monitor has no bin population to compute a CSI against, and a real and deliberate part of
+the shift is now invisible to characteristic attribution. It reaches the score anyway, through
+`EMPLOYED_YEARS` and `NAME_INCOME_TYPE`, which is why those two sit where they do.
+
+That is the honest cost of the refit and it is worth stating rather than burying: removing a
+characteristic from a card also removes it from everything that watches the card. An analyst
+handed this alert is pointed at the bureau scores immediately and at the age mix only by
+inference.
 
 Every alert record carries the metric, window, value, threshold, the consecutive run, the
 specific window ids behind it and the attributed characteristics:
 
 ```
-[2026-08-28T07:08:31.754+00:00] window 13 | psi_score | 0.6414 vs 0.25 | 3 consecutive
+[2026-08-28T12:32:40.267+00:00] window 13 | psi_score | 0.6615 vs 0.25 | 3 consecutive
    breach windows: [11, 12, 13]
-   attributed: ['EXT_SOURCE_3', 'EXT_SOURCE_2', 'AGE_YEARS']
+   attributed: ['EXT_SOURCE_3', 'EXT_SOURCE_2']
 ```
 
 ## The dashboard
@@ -573,7 +787,7 @@ The simulation warning is the first thing on the page.
 
 ## Tests
 
-141 tests, `make test`, roughly 11 seconds. `make install-dev` first, since the test
+171 tests, `make test`, roughly 5 seconds. `make install-dev` first, since the test
 runner is not in `requirements.txt`: nothing in the runtime image invokes pytest, and a
 dependency that ships unused still has to be patched.
 
@@ -589,6 +803,7 @@ dependency that ships unused still has to be patched.
 | `test_contract.py` | the startup contract check, in both directions |
 | `test_config.py` | how the project root is settled, and what happens when it cannot be |
 | `test_dashboard.py` | the dashboard script runs, empty and populated |
+| `test_reasons.py` | the points decomposition, ranking, missing statements, the prohibited basis guard |
 
 Four of these exist because they caught something rather than confirmed something: the
 schema migration test reproduces an actual failure where adding a column to the alerts table
@@ -608,6 +823,7 @@ src/
   train.py       fit, evaluate, freeze the artifact and the reference distributions
   schemas.py     the request contract and its validation rules
   scoring.py     the scoring path, transport agnostic
+  reasons.py     adverse action reason codes, and what they are allowed to disclose
   api.py         FastAPI app
   store.py       SQLite store, with an additive schema migration
   drift.py       PSI, CSI, band drift
@@ -619,6 +835,7 @@ scripts/
   run_end_to_end.py     the documented entrypoint behind every number here
   window_size_noise.py  the measured justification for the window size
   validate_compose.py   structural checks on the compose setup, no daemon needed
+  adverse_action_audit.py  reason code frequency, basis comparison, the Regulation B age check
 docs/business_case.md
 Dockerfile                        local image, model trained into a bind mount
 Dockerfile.cloudrun               Cloud Run image, model baked in, self contained
@@ -651,6 +868,18 @@ Where it is weak, and I would rather say this than have it drawn out of me:
   is measured, which is a different and weaker claim than calibration.
 - **`SK_ID_CURR` order is a proxy for time.** The dataset has no date column. The held out
   slice is genuinely held out from fitting, but "later" is an assumption.
+- **The card allocated points on two prohibited bases, and I shipped it that way for a while.**
+  The project excluded `CODE_GENDER` at the request boundary and said so prominently, which read
+  as more care than was actually taken: `NAME_FAMILY_STATUS` and `AGE_YEARS` were retained
+  without the same question being asked, and the age treatment did not satisfy Regulation B. Both
+  are now removed, the cost is measured, and `src/train.py` refuses to fit a card that retains a
+  prohibited basis. But the defect stood in a deployed service and was found by accident, while
+  building something else. The gate that now exists is worth more than the fix it guards, and it
+  only catches characteristics the registry names.
+- **The deployed image is two model versions behind.** The Cloud Run service was built from the
+  14 characteristic card. It is not answering, because billing is disabled, so nothing is serving
+  the old card to anyone, but the URL in this README does not point at the model described here
+  and would need a rebuild and redeploy before it did.
 - **Nothing here monitors whether the model is still right.** Stability indices watch inputs
   and outputs. A card can be perfectly stable and quietly stop ranking risk. Catching that
   needs back testing against realised defaults, which this extract cannot support.
