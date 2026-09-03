@@ -123,12 +123,12 @@ def test_a_declared_level_absent_from_the_fit_does_not_block_startup():
 def test_unresolved_levels_are_reported_on_stderr_rather_than_silently(capsys):
     """Not blocking is not the same as not saying. A reviewer should be able to see which
     accepted levels the card cannot tell apart."""
-    scoring = build_scoring(resolvable={"NAME_FAMILY_STATUS": ["Married", "Single / not married"]})
+    scoring = build_scoring(resolvable={"NAME_INCOME_TYPE": ["Working", "Pensioner"]})
     verify_contract(scoring)
 
     reported = capsys.readouterr().err
-    assert "NAME_FAMILY_STATUS" in reported
-    assert "Widow" in reported
+    assert "NAME_INCOME_TYPE" in reported
+    assert "Businessman" in reported
     assert "catch all" in reported
 
 
@@ -138,7 +138,7 @@ def test_an_undeclared_level_is_still_fatal_alongside_an_unresolved_one():
     """The permissive direction must not make the strict one permissive too."""
     scoring = build_scoring(
         fitted={"NAME_EDUCATION_TYPE": CATEGORICAL_LEVELS["NAME_EDUCATION_TYPE"] + ["Doctorate"]},
-        resolvable={"NAME_FAMILY_STATUS": ["Married"]},
+        resolvable={"NAME_INCOME_TYPE": ["Working"]},
     )
     with pytest.raises(RuntimeError, match="Doctorate"):
         verify_contract(scoring)

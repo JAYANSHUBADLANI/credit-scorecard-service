@@ -95,6 +95,16 @@ class ServiceConfig:
 
 
 @dataclass
+class AdverseActionConfig:
+    basis: str = "max_observed"
+    max_reasons: int = 4
+    min_shortfall_points: float = 0.05
+    adverse_bands: List[str] = field(default_factory=lambda: ["decline"])
+    on_prohibited_basis: str = "warn"
+    on_prohibited_basis_at_fit: str = "raise"
+
+
+@dataclass
 class DataConfig:
     raw_path: str
     id_column: str
@@ -113,6 +123,7 @@ class Config:
     monitoring: MonitoringConfig
     stream: StreamConfig
     service: ServiceConfig
+    adverse_action: AdverseActionConfig = field(default_factory=AdverseActionConfig)
     root: Path = field(default=PROJECT_ROOT)
 
     def path(self, relative: str) -> Path:
@@ -175,5 +186,10 @@ def load_config(path: Path | str | None = None, root: Path | str | None = None) 
         monitoring=MonitoringConfig(**_as_dict(raw, "monitoring")),
         stream=StreamConfig(**_as_dict(raw, "stream")),
         service=ServiceConfig(**_as_dict(raw, "service")),
+        # Optional, unlike every other section. A config written before reason codes existed
+        # still loads, and the defaults it gets are the ones documented in config.yaml. The
+        # settings decide the wording of a compliance notice, so they are worth defaulting
+        # conservatively rather than refusing to start over an absent section.
+        adverse_action=AdverseActionConfig(**raw.get("adverse_action", {})),
         root=resolved_root,
     )

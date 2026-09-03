@@ -30,9 +30,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .features import DAYS_EMPLOYED_SENTINEL
 
-# There is no gender field. It is not merely unused by the model: the request contract does
-# not accept it, so a caller cannot send it and a later refit cannot quietly pick it up. See
-# README, "Characteristics deliberately excluded".
+# There is no gender field and no marital status field. Neither is merely unused by the model:
+# the request contract does not accept them, so a caller cannot send one and a later refit
+# cannot quietly pick one up. `DAYS_BIRTH` is different and is still accepted, because an
+# applicant has to be of age to contract and the bounds below are what check it. It is
+# validated and never scored. See README, "Characteristics deliberately excluded".
 EducationLiteral = Literal[
     "Academic degree",
     "Higher education",
@@ -50,14 +52,6 @@ IncomeTypeLiteral = Literal[
     "Unemployed",
     "Working",
 ]
-FamilyStatusLiteral = Literal[
-    "Civil marriage",
-    "Married",
-    "Separated",
-    "Single / not married",
-    "Unknown",
-    "Widow",
-]
 ContractTypeLiteral = Literal["Cash loans", "Revolving loans"]
 
 # Checked against the fitted artifact at startup so the published contract and the model
@@ -65,10 +59,10 @@ ContractTypeLiteral = Literal["Cash loans", "Revolving loans"]
 CATEGORICAL_LEVELS: Dict[str, List[str]] = {
     "NAME_EDUCATION_TYPE": list(EducationLiteral.__args__),
     "NAME_INCOME_TYPE": list(IncomeTypeLiteral.__args__),
-    "NAME_FAMILY_STATUS": list(FamilyStatusLiteral.__args__),
     "NAME_CONTRACT_TYPE": list(ContractTypeLiteral.__args__),
 }
 
+# Capacity to contract, not a model input. No characteristic is derived from DAYS_BIRTH.
 MIN_DAYS_BIRTH = -36525.0   # 100 years old
 MAX_DAYS_BIRTH = -6570.0    # 18 years old
 
@@ -111,7 +105,6 @@ class ScoreRequest(BaseModel):
 
     NAME_EDUCATION_TYPE: EducationLiteral
     NAME_INCOME_TYPE: IncomeTypeLiteral
-    NAME_FAMILY_STATUS: FamilyStatusLiteral
     NAME_CONTRACT_TYPE: ContractTypeLiteral
 
     @model_validator(mode="after")
@@ -140,6 +133,23 @@ class ScoreRequest(BaseModel):
         return self
 
 
+class ReasonCode(BaseModel):
+    """One principal reason for an adverse action, with the points behind it.
+
+    The arithmetic is published alongside the statement on purpose. A reason an applicant
+    cannot check is a reason they cannot contest, and a reviewer handling a complaint needs to
+    see that this characteristic cost this applicant these points against this reference.
+    """
+
+    rank: int = Field(ge=1, description="1 is the most costly characteristic")
+    code: str = Field(description="Stable across refits, see src/reasons.STATEMENTS")
+    feature: str
+    statement: str = Field(description="The applicant facing reason")
+    points: float = Field(description="Points this applicant earned on the characteristic")
+    reference_points: float = Field(description="Points the reference profile earns on it")
+    shortfall: float = Field(description="reference_points - points, what the reason ranks on")
+
+
 class ScoreResponse(BaseModel):
     """The scoring decision, plus the identifiers a reviewer needs to trace it."""
 
@@ -149,6 +159,14 @@ class ScoreResponse(BaseModel):
     band: Literal["decline", "refer", "approve"]
     model_version: str
     scored_at: str
+    # Empty for any band that is not an adverse action, which is every band but `decline`.
+    # Regulation B attaches the disclosure to the decision to decline, and returning reasons on
+    # an approval would invite them to be presented as though a decision had gone against the
+    # applicant. See src/reasons.py.
+    reason_codes: List[ReasonCode] = Field(
+        default_factory=list,
+        description="Principal reasons for the decision, most costly first. Declines only.",
+    )
 
 
 class HealthResponse(BaseModel):

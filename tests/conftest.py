@@ -76,6 +76,5 @@ def valid_payload() -> dict:
         "REGION_POPULATION_RELATIVE": 0.018,
         "NAME_EDUCATION_TYPE": "Higher education",
         "NAME_INCOME_TYPE": "Working",
-        "NAME_FAMILY_STATUS": "Married",
         "NAME_CONTRACT_TYPE": "Cash loans",
     }

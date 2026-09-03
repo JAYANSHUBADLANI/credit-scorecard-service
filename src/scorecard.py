@@ -119,18 +119,43 @@ class Scorecard:
         table.attrs["intercept"] = float(self.model.intercept_[0])
         return table
 
-    def scorecard_table(self, transformer: WOETransformer) -> pd.DataFrame:
-        """The card itself: every bin of every retained characteristic with its points."""
+    def points_by_bin(self, transformer: WOETransformer) -> Dict[str, np.ndarray]:
+        """Points for every bin of every retained characteristic, missing bin last.
+
+        The intercept and the offset are split evenly across the characteristics, which is the
+        usual convention and the reason the per characteristic points sum exactly to the score
+        rather than to the score minus a constant. `tests/test_reasons.py` asserts that identity
+        on real applications, because everything the adverse action reasons say rests on it: a
+        reason code is a claim that this characteristic cost the applicant these points, and
+        that claim is only true if the decomposition is exact.
+
+        Allocation lives here, in one place, rather than being written once for the card table
+        a credit committee reviews and again for the reason codes an applicant is sent. Those
+        two disagreeing is not a cosmetic bug. It means the reason on the notice is not the
+        reason in the model.
+        """
         n = len(self.features)
         intercept = float(self.model.intercept_[0])
         coefficients = dict(zip(self.features, self.model.coef_[0]))
+        allocated: Dict[str, np.ndarray] = {}
+        for feature in self.features:
+            binning = transformer.bins[feature]
+            woe = np.append(binning.woe, binning.missing_woe)
+            allocated[feature] = (
+                -self.scaling.factor * (coefficients[feature] * woe + intercept / n)
+                + self.scaling.offset / n
+            )
+        return allocated
+
+    def scorecard_table(self, transformer: WOETransformer) -> pd.DataFrame:
+        """The card itself: every bin of every retained characteristic with its points."""
+        points = self.points_by_bin(transformer)
         rows = []
         for feature in self.features:
             table = transformer.bins[feature].table.copy()
-            table["points"] = (
-                -self.scaling.factor * (coefficients[feature] * table["woe"] + intercept / n)
-                + self.scaling.offset / n
-            ).round(1)
+            # Indexed by bin_index rather than by row order, so the table and the points cannot
+            # be silently misaligned if the bin table is ever reordered.
+            table["points"] = points[feature][table["bin_index"].to_numpy()].round(1)
             rows.append(table)
         return pd.concat(rows, ignore_index=True)
 

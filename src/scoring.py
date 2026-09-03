@@ -10,7 +10,7 @@ sees the same bins the model used.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -19,8 +19,24 @@ import numpy as np
 import pandas as pd
 
 from .features import build_features
+from .reasons import AssignedReason, ReasonCodeAssigner
 from .scorecard import ScorecardArtifact
 from .store import utc_now
+
+
+def load_artifact(path: Path | str) -> ScorecardArtifact:
+    """Load the frozen artifact, or say plainly that training has not been run.
+
+    Separate from `ScoringService.from_path` because the reason code assigner is built from the
+    artifact and the service is built from both, so a caller configuring reasons needs the
+    artifact before it has a service to ask for one.
+    """
+    resolved = Path(path)
+    if not resolved.exists():
+        raise FileNotFoundError(
+            f"no scorecard artifact at {resolved}. Run `make train` before starting the service."
+        )
+    return joblib.load(resolved)
 
 
 @dataclass
@@ -32,23 +48,28 @@ class ScoringResult:
     bin_indices: Dict[str, int]
     model_version: str
     scored_at: str
+    # Empty unless the band is an adverse action. See src/reasons.py: a reason code on an
+    # approved application is not a reason for anything.
+    reason_codes: List[AssignedReason] = field(default_factory=list)
 
 
 class ScoringService:
     """Loads the frozen artifact once and scores requests against it."""
 
-    def __init__(self, artifact: ScorecardArtifact):
+    def __init__(
+        self, artifact: ScorecardArtifact, reasons: Optional[ReasonCodeAssigner] = None
+    ):
         self.artifact = artifact
+        # Built here rather than per request: the per bin points and the reference profile are
+        # fixed by the artifact, so recomputing them per decline would be work done 40,000
+        # times to get the same answer.
+        self.reasons = reasons or ReasonCodeAssigner(artifact)
 
     @classmethod
-    def from_path(cls, path: Path | str) -> "ScoringService":
-        resolved = Path(path)
-        if not resolved.exists():
-            raise FileNotFoundError(
-                f"no scorecard artifact at {resolved}. Run `make train` before starting the "
-                "service."
-            )
-        return cls(joblib.load(resolved))
+    def from_path(
+        cls, path: Path | str, reasons: Optional[ReasonCodeAssigner] = None
+    ) -> "ScoringService":
+        return cls(load_artifact(path), reasons=reasons)
 
     @property
     def model_version(self) -> str:
@@ -105,6 +126,7 @@ class ScoringService:
                 bin_indices=indices[i],
                 model_version=self.artifact.model_version,
                 scored_at=scored_at,
+                reason_codes=self.reasons.assign(indices[i], str(band[i])),
             )
             for i in range(len(payloads))
         ]
