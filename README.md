@@ -509,7 +509,7 @@ breaking local development in the process.
 I checked the deployed shape before pushing it anywhere, by running the Cloud Run image locally
 with no volume mounts at all. `/health` reported `requests_scored: 0`, confirming a genuinely
 fresh instance rather than one reading a leftover database, and `/score` returned the same
-592.64. So the baked in artifact is the right one, not merely present.
+585.01. So the baked in artifact is the right one, not merely present.
 
 ### Getting it onto Cloud Run
 
@@ -520,12 +520,17 @@ because nothing else in the toolchain warns you.
 
 ```bash
 docker build --platform=linux/amd64 -f Dockerfile.cloudrun \
-  -t us-central1-docker.pkg.dev/PROJECT/credit-scorecard-service/api:1.0.0 .
-docker push us-central1-docker.pkg.dev/PROJECT/credit-scorecard-service/api:1.0.0
+  -t us-central1-docker.pkg.dev/PROJECT/credit-scorecard-service/api:TAG .
+docker push us-central1-docker.pkg.dev/PROJECT/credit-scorecard-service/api:TAG
 gcloud run deploy credit-scorecard-api \
-  --image=us-central1-docker.pkg.dev/PROJECT/credit-scorecard-service/api:1.0.0 \
+  --image=us-central1-docker.pkg.dev/PROJECT/credit-scorecard-service/api:TAG \
   --region=us-central1 --memory=512Mi --max-instances=2 --allow-unauthenticated
 ```
+
+`TAG` is bumped on every redeploy rather than reused, so a rollback is just rerunning the
+`gcloud run deploy` line with the previous tag. The currently live tag is `1.1.0`, redeployed
+2026-09-05 to pick up the fair lending fix; `1.0.0` is still in the registry, unused, as the
+record of what was live before that.
 
 `--max-instances=2` is deliberate. The service is genuinely open to the internet, so the cap is
 what bounds the cost of that.
@@ -536,8 +541,8 @@ Checked against the deployed URL, not against a local run:
 
 | Request | Result |
 | --- | --- |
-| `GET /health` | 200, model version 1.0.0, 15 features, matching `trained_at` |
-| `POST /score`, complete application | 200, score 592.64, PD 0.025159, band `approve` |
+| `GET /health` | 200, model version 1.0.0, 12 features, matching `trained_at` |
+| `POST /score`, complete application | 200, score 585.01, PD 0.032533, band `approve` |
 | `POST /score`, missing fields | 422, field by field validation errors |
 | `GET /docs` | 200 |
 | `GET /` | 404, no route defined |
