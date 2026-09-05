@@ -88,6 +88,15 @@ in the README comes from the rerun on that card.
 - The first build was arm64, this laptop's native architecture, and Cloud Run rejected it with
   an explicit amd64 requirement. Rebuilt with `--platform=linux/amd64`, which is what is
   deployed.
+- Redeployed on 2026-09-05 as `api:1.1.0`, from the source as it stands after the
+  2026-09-04 fair lending commit. The image previously live had been built before that
+  commit, so it was still asking for `CODE_GENDER` and `NAME_FAMILY_STATUS` on every
+  request, exactly what `MUST_NOT_COLLECT` says the service refuses. `/health` now
+  reports `trained_at` 2026-08-28 and 12 model features, `/score` on the reference
+  application returns 585.01, probability 0.032533, band `approve`, and sending
+  `CODE_GENDER` back gets a 422 for an extra field rather than being accepted. `1.0.0`
+  is left in the registry rather than overwritten, so the pre-fix image is still there
+  if anyone needs to see what was live before.
 - Only `api` is deployed. `dashboard` and `monitor` are not, see "Still open".
 
 ### Phase 6, adverse action reason codes: done
@@ -224,10 +233,7 @@ One consequence worth keeping in view, which is a cost of the refit rather than 
    store moves to Cloud SQL or if authentication is put in front of `/score`.
 7. **`/score` is unauthenticated and `/docs` is public.** A deliberate choice for a public
    portfolio demo over a public Kaggle dataset, and the wrong choice for anything real.
-8. **The deployed image is two model versions behind.** Cloud Run was built from the 14
-   characteristic card. Nothing is being served to anyone, because billing is disabled, but a
-   rebuild and redeploy is needed before the URL matches the model this README describes.
-9. **The prohibited basis gate matches on names.** `PROHIBITED_BASES` catches the characteristics
+8. **The prohibited basis gate matches on names.** `PROHIBITED_BASES` catches the characteristics
    it names. An age band retained as `LIFE_STAGE`, or any prohibited basis reconstructed under a
    different name, passes it. Catching that properly needs feature provenance, which the
    transformation path does not currently record.
