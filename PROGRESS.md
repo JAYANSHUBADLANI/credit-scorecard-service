@@ -7,9 +7,9 @@ Running status for this project. Updated as phases complete.
 The Phase 2 caveat is closed. The container path was written and statically checked for a long
 time without ever being built, because there was no Docker daemon available. That has now been
 built, run, and deployed. The API was deployed and verified on Google Cloud Run at
-https://credit-scorecard-api-403429711696.us-central1.run.app. It is not answering at present:
-billing is disabled on the project, so treat the URL as a record of the deployment rather than
-a working demo, as the README already says. Every number quoted in the README comes from a real
+https://credit-scorecard-api-403429711696.us-central1.run.app. It is answering: the running
+image serves model version 1.0.0 with the adverse action reason codes, so the URL is a working
+demo and not only a record of the deployment, as the README now says. Every number quoted in the README comes from a real
 run.
 
 Phase 6 added adverse action reason codes, which was meant to be a two day gap closing exercise

@@ -5,8 +5,7 @@
 CI runs the 90 tests that do not need the fitted artifact. The other 81 need `make train` on the raw Home Credit data first and run locally.
 
 I built a scoring API for an application credit scorecard, containerised it, deployed it to
-Google Cloud Run (the deployment is recorded below; it is not currently serving, because billing
-on the project is off), and then built a
+Google Cloud Run, where it is serving now, and then built a
 drift monitoring system on top of it that keeps running: a stream of scoring requests, rolling
 population and characteristic stability indices against the training time reference, threshold
 alerting with a debounce so it does not fire on noise, and a dashboard showing all of it.
@@ -125,12 +124,11 @@ The containerised path, which stands up all five services in dependency order:
 docker compose up --build
 ```
 
-The API has been deployed to Google Cloud Run at the URL below. It is not answering at present,
-because billing is disabled on the project rather than because anything is wrong with the
-service, and the deployed image predates both the removal of `CODE_GENDER` and the adverse
-action reason codes. Treat it as a record of
-the deployment rather than a working demo, and see "Containerisation and cloud deployment"
-below for both details:
+The API is deployed to Google Cloud Run at the URL below and is answering. The running image
+serves model version 1.0.0 trained 2026-08-28, the same twelve characteristics recorded in
+`reports/model_performance.json`, with `CODE_GENDER` already removed and the adverse action
+reason codes present in the response. See "Containerisation and cloud deployment" below for
+the build and deploy details:
 
 **https://credit-scorecard-api-403429711696.us-central1.run.app/docs**
 
@@ -438,7 +436,7 @@ having and is not the same as proving a card is clean.
 
 An earlier version of this README said the image had never been built and the stack had never
 been run. That is no longer true. The stack has been built and run locally, and the API was
-deployed to Google Cloud Run at this URL (currently returning 503, see above):
+deployed to Google Cloud Run at this URL, which is live:
 
 **https://credit-scorecard-api-403429711696.us-central1.run.app/docs**
 
