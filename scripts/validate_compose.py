@@ -1,8 +1,7 @@
 """Static checks on the container setup, runnable without a Docker daemon.
 
-This originally existed because there was no daemon available to build with. The stack has
-since been built, run, and deployed, so this is no longer the only evidence that the container
-path works. It stays because it is a great deal faster than a build and it catches the errors
+This came first, before the stack was ever built. It has since been built, run, and deployed,
+so this is no longer the only evidence that the container path works. It stays because it is a great deal faster than a build and it catches the errors
 that are actually common when the compose file changes: a service that depends on one that does
 not exist, a command pointing at a module that was renamed, a bind mount whose host path is
 missing, a port declared twice.

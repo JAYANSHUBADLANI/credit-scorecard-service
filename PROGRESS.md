@@ -5,8 +5,7 @@ Running status for this project. Updated as phases complete.
 ## Status: eight phases complete, plus a cloud deployment
 
 The Phase 2 caveat is closed. The container path was written and statically checked for a long
-time without ever being built, because there was no Docker daemon available. That has now been
-built, run, and deployed. The API was deployed and verified on Google Cloud Run at
+time before it was first built. It has now been built, run, and deployed. The API was deployed and verified on Google Cloud Run at
 https://credit-scorecard-api-403429711696.us-central1.run.app. It is answering: the running
 image serves model version 1.0.0 with the adverse action reason codes, so the URL is a working
 demo and not only a record of the deployment, as the README now says. Every number quoted in the README comes from a real
