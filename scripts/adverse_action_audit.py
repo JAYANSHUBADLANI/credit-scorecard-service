@@ -321,7 +321,7 @@ def main() -> None:
             "attainable, which is a negative factor assigned on age."
         )
 
-    print(f"\nwritten: reports/reason_code_frequency.csv, reports/adverse_action_audit.json")
+    print("\nwritten: reports/reason_code_frequency.csv, reports/adverse_action_audit.json")
 
 
 if __name__ == "__main__":

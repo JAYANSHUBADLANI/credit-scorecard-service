@@ -15,7 +15,6 @@ import pytest
 
 from src.config import load_config
 from src.monitor import OUTCOME_SCORED, OUTCOME_SKIPPED, OUTCOME_WAITING, MonitorRunner
-from src.store import Store
 from tests.conftest import requires_model
 
 pytestmark = requires_model

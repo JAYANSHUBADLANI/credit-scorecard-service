@@ -14,11 +14,9 @@ way the README claims. The rules under test are:
 
 from __future__ import annotations
 
-import pytest
 
 from src.alerting import (
     POPULATION_METRICS,
-    AlertDecision,
     DebounceConfig,
     consecutive_breach_run,
     evaluate_alert,

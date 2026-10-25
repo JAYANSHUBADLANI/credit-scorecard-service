@@ -10,7 +10,6 @@ empty case is what a reviewer sees if they open the dashboard before running the
 
 from __future__ import annotations
 
-import pytest
 
 from src.config import load_config
 from src.store import Store

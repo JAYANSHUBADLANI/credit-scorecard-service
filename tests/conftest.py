@@ -8,7 +8,6 @@ session would make the suite slow enough that it stops being run.
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import pytest

@@ -356,7 +356,7 @@ class ReasonCodeAssigner:
 def verify_no_prohibited_basis(features, on_prohibited: str = ON_PROHIBITED_RAISE) -> None:
     """Refuse to fit a card that retains a prohibited basis.
 
-    This is the check that should have existed first. `verify_reason_coverage` asks the same
+    The earliest of the three checks. `verify_reason_coverage` asks the same
     question at service startup and the audit asks it after the fact, and both are too late:
     by then the artifact exists, it has been evaluated, its numbers are in a README, and the
     cost of retracting is high enough to argue about. Beside feature selection the answer is

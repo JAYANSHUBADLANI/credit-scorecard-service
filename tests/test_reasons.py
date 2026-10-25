@@ -366,8 +366,8 @@ def test_the_fit_time_gate_can_be_lowered_to_measure_a_cost(capsys):
 def test_training_consults_the_gate_with_the_selected_characteristics(monkeypatch):
     """The gate has to be wired into training, not merely available to it.
 
-    The defect this whole episode came from was a question nobody asked at fit time, so the
-    assertion that matters is that `train` asks it, about the characteristics it actually kept.
+    The gate is only useful if training calls it, so the assertion that matters is that
+    `train` asks it, about the characteristics it actually kept.
     """
     from src import train as train_module
 

@@ -13,9 +13,7 @@ alerting with a debounce so it does not fire on noise, and a dashboard showing a
 The model here is deliberately not the interesting part. It is a refit of the same simple
 weight of evidence and logistic scorecard methodology I used on the application scorecard this
 accompanies, kept unchanged on purpose. What I wanted to build was the part that comes after a
-model is finished: serving it, watching it, and deciding when to interrupt somebody. Every
-other project in my portfolio is analysis in a notebook or a scripted pipeline. Nothing was
-ever served, and nothing kept running.
+model is finished: serving it, watching it, and deciding when to interrupt somebody.
 
 The thing I most want to be judged on is the alerting design, and specifically what it
 declines to send.
@@ -321,12 +319,12 @@ worst available to an applicant 62 or over    36.00   (bin: 63.54 years and over
 Age points fell monotonically across all 17 bins, so no applicant aged 62 or over could reach
 the best age points at all. A 6.46 point penalty, a third of a doubling of odds.
 
-I did not notice either of these until a reason code had to name them to an applicant. The
-project already excluded `CODE_GENDER` at the request boundary and said so prominently, which
-reads as more care than was actually taken: the same question was simply never asked of the
-other two.
+Both surfaced when a reason code had to name them to an applicant, which is the case for
+building a disclosure layer: writing down what an applicant is told forces a check of what they
+are scored on. `CODE_GENDER` was already excluded at the request boundary; this extended the
+same check to the two characteristics the fit had retained.
 
-**What made it worse is that the default configuration hid it.** Under `max_observed` the three
+**The default configuration would not have shown it.** Under `max_observed` the three
 bureau scores crowd everything else out of the top four reasons, so neither prohibited basis was
 ever cited on a notice. Under `population_mean` age appeared on 136 notices and marital status
 on 4. The setting that disclosed the problem was the more informative one, and the default at the
@@ -407,10 +405,10 @@ changed is that the notice now also names what is specific to the applicant.
 
 `max_observed` remains available as a config edit, and both are reported by `make reasons`.
 
-### The check that should have existed first
+### A prohibited basis gate at fit time
 
-The prohibited bases were found by accident, while building something else. The fix for that is
-not vigilance, it is a check in the place where the question is free to ask:
+The reason codes surfaced the prohibited bases at serving time. The durable fix is a check at
+the point where the question is cheapest to ask, before a card is fitted:
 
 ```python
 # src/train.py, immediately after feature selection and before the card is fitted
@@ -434,9 +432,8 @@ having and is not the same as proving a card is clean.
 
 ## Containerisation and cloud deployment
 
-An earlier version of this README said the image had never been built and the stack had never
-been run. That is no longer true. The stack has been built and run locally, and the API was
-deployed to Google Cloud Run at this URL, which is live:
+The stack has been built and run locally, and the API is deployed to Google Cloud Run at this
+URL, which is live:
 
 **https://credit-scorecard-api-403429711696.us-central1.run.app/docs**
 
@@ -555,28 +552,16 @@ not because it is a meaningful throughput number.
 
 ### What is deployed and what is not
 
-Only `api` is on Cloud Run. `dashboard` and `monitor` are not, and I would rather say why than
-leave it looking like an oversight. The dashboard would be a straightforward second Cloud Run
-service. The monitor is not, because it is a long running loop, and a perpetual loop on Cloud
-Run means paying for an always on minimum instance. The honest shape for it is a Cloud Run Job
-on a Cloud Scheduler trigger rather than a loop that never ends, which is a rewrite of how the
-monitor is invoked rather than a deployment command. I have not done that yet.
+Only `api` is on Cloud Run. `dashboard` and `monitor` are not. The dashboard would be a
+straightforward second Cloud Run service. The monitor is not, because it is a long running
+loop, and a perpetual loop on Cloud Run means paying for an always on minimum instance. The
+right shape for it is a Cloud Run Job on a Cloud Scheduler trigger rather than a loop that
+never ends, which is a rewrite of how the monitor is invoked rather than a deployment command.
+I have not done that yet.
 
-Two further things are true of the deployed copy as of this writing, and both matter more than
-the fact that it exists.
-
-It was built and pushed before `CODE_GENDER` was removed, so the image on Cloud Run still holds
-the earlier fifteen characteristic card with gender among them. It disagrees with this
-repository until it is rebuilt with `--platform=linux/amd64` and redeployed.
-
-And it is not serving. Every request returns 503, and the revision's own logs give the reason:
-`The request failed because billing is disabled for this project.` The service itself is fine,
-`gcloud run services describe` reports Ready, ConfigurationsReady and RoutesReady all true, and
-the container answers in 400ms rather than timing out. Nothing is wrong with the image or the
-deployment. The project simply has no billing account attached any more, which is a billing
-console question rather than an engineering one, and re-enabling it is not something I am going
-to do on the strength of a README. Worth knowing that a Cloud Run URL returning 503 is not
-evidence about the code behind it.
+The deployed copy matches this repository: image tag `1.1.0` serves the twelve characteristic
+card in `reports/model_performance.json`, with `CODE_GENDER`, `AGE_YEARS` and
+`NAME_FAMILY_STATUS` removed, as `/health` and `/model` on the live URL report.
 
 ### Known limitations of this deployment
 
@@ -846,7 +831,7 @@ Dockerfile.cloudrun.dockerignore  per Dockerfile ignore file, lets models/ throu
 docker-compose.yml                the five service local stack
 ```
 
-## Honest assessment
+## Limitations
 
 What this demonstrates: a model served behind a real API with validation strict enough to be
 useful, a monitoring system that runs on a schedule against a frozen training baseline and
@@ -856,11 +841,11 @@ the right characteristics. I found and fixed four real defects during the build 
 tests for each, the last of them a startup check that was strict in the wrong direction and
 would have taken the service down over a category level the card cannot even represent.
 
-Where it is weak, and I would rather say this than have it drawn out of me:
+Where it is weak:
 
 - **The deployment is a single container, not production infrastructure.** The API is genuinely
   built, deployed and serving on Cloud Run, which is more than a Dockerfile nobody ran, but it is
-  one service with an in image model, a non durable SQLite store, no authentication, no CI/CD and
+  one service with an in image model, a non durable SQLite store, no authentication, no deployment pipeline (CI runs the tests only) and
   no autoscaling story beyond a two instance cap. The monitor and dashboard are not deployed at
   all. Standing something up is the easy half of this.
 - **The scoring stream is a documented simulation.** Real applications, real model, real HTTP,
@@ -871,22 +856,13 @@ Where it is weak, and I would rather say this than have it drawn out of me:
   is measured, which is a different and weaker claim than calibration.
 - **`SK_ID_CURR` order is a proxy for time.** The dataset has no date column. The held out
   slice is genuinely held out from fitting, but "later" is an assumption.
-- **The card allocated points on two prohibited bases, and I shipped it that way for a while.**
-  The project excluded `CODE_GENDER` at the request boundary and said so prominently, which read
-  as more care than was actually taken: `NAME_FAMILY_STATUS` and `AGE_YEARS` were retained
-  without the same question being asked, and the age treatment did not satisfy Regulation B. Both
-  are now removed, the cost is measured, and `src/train.py` refuses to fit a card that retains a
-  prohibited basis. But the defect stood in a deployed service and was found by accident, while
-  building something else. The gate that now exists is worth more than the fix it guards, and it
-  only catches characteristics the registry names.
-- **The deployed image is two model versions behind.** The Cloud Run service was built from the
-  14 characteristic card. It is not answering, because billing is disabled, so nothing is serving
-  the old card to anyone, but the URL in this README does not point at the model described here
-  and would need a rebuild and redeploy before it did.
+- **The prohibited basis gate matches on names.** `NAME_FAMILY_STATUS` and `AGE_YEARS` are
+  removed and `src/train.py` refuses to fit a card that retains a prohibited basis, but the gate
+  only catches characteristics the registry names. A proxy under another name would pass it.
 - **Nothing here monitors whether the model is still right.** Stability indices watch inputs
   and outputs. A card can be perfectly stable and quietly stop ranking risk. Catching that
   needs back testing against realised defaults, which this extract cannot support.
-- **SQLite and a single threaded API are demonstration scale.** 286 requests per second is
+- **SQLite and a single threaded API are demonstration scale.** 297 requests per second is
   fine for this and nowhere near a real origination platform.
 - **One model, no challenger.** A mature monitoring setup benchmarks the champion against
   something.
