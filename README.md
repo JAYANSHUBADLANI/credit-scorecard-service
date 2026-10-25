@@ -504,7 +504,7 @@ breaking local development in the process.
 I checked the deployed shape before pushing it anywhere, by running the Cloud Run image locally
 with no volume mounts at all. `/health` reported `requests_scored: 0`, confirming a genuinely
 fresh instance rather than one reading a leftover database, and `/score` returned the same
-585.01. So the baked in artifact is the right one, not merely present.
+score as the run on the host. So the baked in artifact is the right one, not merely present.
 
 ### Getting it onto Cloud Run
 
@@ -537,13 +537,16 @@ Checked against the deployed URL, not against a local run:
 | Request | Result |
 | --- | --- |
 | `GET /health` | 200, model version 1.0.0, 12 features, matching `trained_at` |
-| `POST /score`, complete application | 200, score 585.01, PD 0.032533, band `approve` |
+| `POST /score`, complete application | 200, score 590.52, PD 0.027031, band `approve` |
 | `POST /score`, missing fields | 422, field by field validation errors |
 | `GET /docs` | 200 |
 | `GET /` | 404, no route defined |
 
 The score returned by the deployed service is identical to the one the local container returned,
 which is the point of baking the artifact in rather than refitting per environment.
+
+The service scales to zero when idle, so the first request after a quiet period is slow: about 18
+seconds in the latest check, against 0.3 to 0.5 seconds for the requests that followed.
 
 Round trip latency from my machine is a median of 0.365s over 10 warm requests. That figure is
 mostly distance to `us-central1` and says very little about the service, which handles these
