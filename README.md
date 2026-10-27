@@ -130,6 +130,10 @@ the build and deploy details:
 
 **https://credit-scorecard-api-403429711696.us-central1.run.app/docs**
 
+The Google Cloud free trial behind this link ends on 15 November 2026. After that the
+service is stopped unless the account is upgraded, and the project is best run locally as
+described above (see "Known limitations of this deployment").
+
 ## Getting the data
 
 The raw CSV is not in this repository. It is roughly 158 MB, which does not belong in git.
@@ -568,6 +572,10 @@ card in `reports/model_performance.json`, with `CODE_GENDER`, `AGE_YEARS` and
 
 ### Known limitations of this deployment
 
+- **The deployment is on a free-trial project.** The Google Cloud trial ends on 15 November
+  2026, after which the service is stopped unless the account is upgraded. A link that no longer
+  answers after that date means the service is stopped, not broken. Everything else in this
+  project runs locally with the commands in the quick start.
 - **The SQLite store does not survive a restart.** Cloud Run's filesystem is writable for the
   life of an instance but not durable across restarts or scale events, and there is no bind
   mount to point at the way local development has. Scoring is correct on every request, but
